@@ -14,6 +14,19 @@ else
 fi
 mkdir -p "$APP_DEST"
 
+# swiftc lives behind the Xcode Command Line Tools. Without them /usr/bin/swiftc
+# is a stub that fails with a cryptic message halfway through the build.
+if ! /usr/bin/xcrun --find swiftc >/dev/null 2>&1; then
+    echo "Xcode Command Line Tools are required to build the app." >&2
+    echo "Install them and re-run:  xcode-select --install" >&2
+    exit 1
+fi
+
+# Claude Code itself is what this indicator watches.
+if [ ! -d "$HOME/.claude" ]; then
+    echo "warning: ~/.claude not found - is Claude Code installed?" >&2
+fi
+
 # A stable interpreter that does not depend on conda/asdf being on PATH.
 if [ -x /usr/bin/python3 ]; then
     PYTHON=/usr/bin/python3
