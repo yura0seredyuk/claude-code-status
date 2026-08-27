@@ -27,6 +27,13 @@ for r in records {
     if !lines.subtitle.isEmpty { print("      \(lines.subtitle)") }
 }
 
+let unhandled = unhandledEvents(file)
+if !unhandled.isEmpty {
+    print(String(repeating: "─", count: 46))
+    print("Claude Code sent \(plural(unhandled.count, "event", "events")) this build does not handle")
+    print("      \(unhandled.joined(separator: ", "))")
+}
+
 let limitsPath = NSHomeDirectory() + "/.claude/claude-status/limits.json"
 if let data = try? Data(contentsOf: URL(fileURLWithPath: limitsPath)),
    let limits = try? decoder.decode(LimitsFile.self, from: data) {

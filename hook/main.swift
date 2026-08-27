@@ -260,6 +260,47 @@ func prune(_ sessions: inout [String: Any], keeping keepID: String?) {
     }
 }
 
+// The events this build knows how to fold into a status. Everything in that
+// handling was established by watching Claude Code rather than from any
+// documentation, so a release that renames an event, or sends a new one for a
+// matcher we registered, would change what the icon does with nothing anywhere
+// saying why. The tally below is the cheap insurance: it rides in the state
+// file that is written on every event anyway, so it costs no extra write.
+let knownEvents: Set<String> = [
+    "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
+    "PostToolUseFailure", "PermissionRequest", "PermissionDenied",
+    "Notification", "Stop", "StopFailure", "SessionEnd",
+]
+
+let maxTalliedEvents = 40
+
+func recordEvent(_ events: inout [String: Any], _ name: String) {
+    guard !name.isEmpty else { return }
+    let stamp = now()
+    var entry = events[name] as? [String: Any] ?? [:]
+    // Carried explicitly: the app decodes with convertFromSnakeCase, which
+    // rewrites dictionary keys too, and an event named with an underscore would
+    // otherwise be displayed under a name Claude Code never sent.
+    entry["name"] = name
+    entry["count"] = (entry["count"] as? Int ?? 0) + 1
+    entry["last_seen"] = stamp
+    if entry["first_seen"] == nil { entry["first_seen"] = stamp }
+    if !knownEvents.contains(name) { entry["unhandled"] = true }
+    events[name] = entry
+
+    // Bounded, so a renamed-every-release event or a malformed payload cannot
+    // grow the file without limit. The least recently seen go first.
+    if events.count > maxTalliedEvents {
+        let ordered = events.sorted {
+            (($0.value as? [String: Any])?["last_seen"] as? Double ?? 0)
+                < (($1.value as? [String: Any])?["last_seen"] as? Double ?? 0)
+        }
+        for (key, _) in ordered.prefix(events.count - maxTalliedEvents) where key != name {
+            events.removeValue(forKey: key)
+        }
+    }
+}
+
 func saveState(_ state: [String: Any]) throws {
     var copy = state
     copy["version"] = stateVersion
@@ -682,6 +723,10 @@ func hookMain(_ raw: Data) {
     let result = applyEvent(&sessions, event)
     prune(&sessions, keeping: result.removed ? nil : result.sid)
     state["sessions"] = sessions
+
+    var events = state["events"] as? [String: Any] ?? [:]
+    recordEvent(&events, event["hook_event_name"] as? String ?? "")
+    state["events"] = events
     do {
         try saveState(state)
         debug("\(event["hook_event_name"] as? String ?? "?") -> ok")

@@ -38,6 +38,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
 
     /// nil means the feature was never switched on, and the menu says nothing
     /// about it at all. Once limits.json exists it always has something to say.
+    /// Event names Claude Code sent that this build has no handling for. Empty
+    /// unless Claude Code changed the protocol under us.
+    private var unhandled: [String] = []
     private var limits: LimitsFile?
     private var limitsSignature: String = ""
     private var usageCache: UsageCache?
@@ -154,10 +157,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
     }
 
     private func readSessions() -> [SessionRecord] {
+        unhandled = []
         guard let data = try? Data(contentsOf: stateURL) else { return [] }
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         guard let file = try? decoder.decode(StateFile.self, from: data) else { return [] }
+        unhandled = unhandledEvents(file)
         return file.sessions.values.sorted { $0.stamp > $1.stamp }
     }
 
@@ -381,6 +386,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
             }
         }
 
+        addUnhandledItem(to: menu)
         addLimitItems(to: menu)
 
         menu.addItem(.separator())
@@ -432,6 +438,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
         menuItem.image = statusImage(status: state == .idle ? record.state : state, badge: false, phase: 0)
         menuItem.toolTip = record.cwd
         return menuItem
+    }
+
+    /// Silent in the normal case. It appears when Claude Code starts sending
+    /// something this build was not written against, which is the one failure
+    /// mode that otherwise just looks like the icon quietly getting things wrong.
+    private func addUnhandledItem(to menu: NSMenu) {
+        guard !unhandled.isEmpty else { return }
+        menu.addItem(.separator())
+        let names = unhandled.prefix(4).joined(separator: ", ")
+        menu.addItem(infoItem(
+            "Claude Code sent " + plural(unhandled.count, "event", "events") + " this build does not handle",
+            tip: names + (unhandled.count > 4 ? ", …" : "")
+               + "\n\nClaude Code's hook protocol changed. Some of what the icon "
+               + "shows may be wrong or missing until Claude Status is updated."))
     }
 
     /// Shown only once limits.json exists: an install that never asked for plan

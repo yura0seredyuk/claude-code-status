@@ -69,7 +69,11 @@ for sid, r in sorted(d["sessions"].items()):
     if isinstance(r.get("last_error"), dict):
         r["last_error"] = {k: v for k, v in r["last_error"].items() if k != "at"}
     out[sid] = r
-json.dump(out, sys.stdout, indent=2, sort_keys=True, ensure_ascii=False)
+events = {}
+for name, tally in sorted(d.get("events", {}).items()):
+    events[name] = {k: v for k, v in tally.items() if k not in ("last_seen", "first_seen")}
+json.dump({"sessions": out, "events": events}, sys.stdout,
+          indent=2, sort_keys=True, ensure_ascii=False)
 '
 GOLDEN="$HERE/golden/state.json"
 STATE="$H1/.claude/claude-status/state.json"
@@ -89,6 +93,21 @@ GONE=$("$PY" -c "import json;print('s3' in json.load(open('$STATE'))['sessions']
 is "SessionEnd removed s3" "$GONE" "False"
 COUNT=$("$PY" -c "import json;print(len(json.load(open('$STATE'))['sessions']))")
 is "only the live sessions remain" "$COUNT" "3"
+
+# An event this build was not written against must be counted and flagged, not
+# silently dropped - that is the whole point of the tally.
+UNHANDLED=$("$PY" -c "
+import json
+e = json.load(open('$STATE'))['events']
+print(','.join(sorted(n for n, t in e.items() if t.get('unhandled'))))")
+is "an unknown event is flagged" "$UNHANDLED" "ToolFailure"
+TALLY=$("$PY" -c "import json;print(json.load(open('$STATE'))['events']['ToolFailure']['count'])")
+is "and counted" "$TALLY" "2"
+KNOWN=$("$PY" -c "
+import json
+e = json.load(open('$STATE'))['events']
+print(sum(1 for t in e.values() if not t.get('unhandled')))")
+is "handled events tallied too" "$KNOWN" "10"
 
 # ---------------------------------------------------------------------------
 echo "Status line -> limits.json"

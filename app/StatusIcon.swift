@@ -81,9 +81,32 @@ struct SessionRecord: Decodable {
     }
 }
 
+/// How many of each event Claude Code has actually sent this build, and whether
+/// it knew what to do with them. Everything this app understands about the hook
+/// protocol was learned by observation, so a release that renames or adds an
+/// event needs somewhere to become visible rather than just quietly changing
+/// what the icon does.
+struct EventTally: Decodable {
+    let name: String?
+    let count: Int?
+    let lastSeen: Double?
+    let unhandled: Bool?
+}
+
 struct StateFile: Decodable {
     let updatedAt: Double?
     let sessions: [String: SessionRecord]
+    let events: [String: EventTally]?
+}
+
+/// Names Claude Code sent that this build has no handling for, most recent
+/// first. Empty in the normal case, which is why it earns a menu row when it
+/// is not.
+func unhandledEvents(_ file: StateFile) -> [String] {
+    return (file.events ?? [:]).values
+        .filter { $0.unhandled == true }
+        .sorted { ($0.lastSeen ?? 0) > ($1.lastSeen ?? 0) }
+        .compactMap { $0.name }
 }
 
 // ---------------------------------------------------------------------------

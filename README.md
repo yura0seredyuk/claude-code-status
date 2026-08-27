@@ -282,6 +282,24 @@ And about the status line, which is where the plan limits live:
   values, and unlike Python's `json` it has no `strict=False`. The hook escapes
   control characters inside string literals itself before parsing.
 
+### When Claude Code changes the protocol
+
+Everything above was established by watching Claude Code, not from
+documentation. A release that renames an event, or starts sending a new one for
+a matcher we registered, would change what the icon does with nothing anywhere
+saying why.
+
+So `state.json` carries a tally: how many of each event name arrived, when it
+was last seen, and whether this build had any handling for it. It rides in a
+file that is written on every event anyway, so it costs nothing. When something
+unrecognised turns up the menu says so — otherwise it stays silent, which is
+the normal case.
+
+It does not catch the opposite: an event that is renamed *away* simply stops
+arriving, and a hook that never fires cannot report that it did not. The tally
+is what lets you tell the difference by hand — `events` in `state.json` shows
+exactly which of the eleven registered events this machine is still receiving.
+
 ### Known limitation
 
 Claude Code sends `PermissionRequest` before the permission prompt, but sends

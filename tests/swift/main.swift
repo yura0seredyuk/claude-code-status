@@ -115,6 +115,34 @@ check("cache older than a day", rows(#"""
 check("no cache key", rows(#"{"other":1}"#), "NO CACHE")
 
 // ---------------------------------------------------------------------------
+print("  unhandledEvents")
+func unhandled(_ json: String) -> String {
+    guard let file = try? decoder.decode(StateFile.self, from: json.data(using: .utf8)!)
+    else { return "DECODE FAILED" }
+    let names = unhandledEvents(file)
+    return names.isEmpty ? "(none)" : names.joined(separator: ",")
+}
+check("nothing unhandled",
+      unhandled(#"{"sessions":{},"events":{"Stop":{"name":"Stop","count":3,"last_seen":1}}}"#),
+      "(none)")
+// Most recent first, so the newest surprise leads.
+check("most recent first",
+      unhandled(#"""
+{"sessions":{},"events":{
+ "Old":{"name":"Old","count":1,"last_seen":10,"unhandled":true},
+ "New":{"name":"New","count":1,"last_seen":20,"unhandled":true},
+ "Stop":{"name":"Stop","count":9,"last_seen":30}}}
+"""#), "New,Old")
+// The name is carried in the entry because convertFromSnakeCase rewrites
+// dictionary keys: an event actually called foo_bar must not be reported as
+// fooBar, a name Claude Code never sent.
+check("underscored name survives the key conversion",
+      unhandled(#"{"sessions":{},"events":{"foo_bar":{"name":"foo_bar","count":1,"last_seen":1,"unhandled":true}}}"#),
+      "foo_bar")
+check("an old state file with no tally",
+      unhandled(#"{"sessions":{}}"#), "(none)")
+
+// ---------------------------------------------------------------------------
 // The seam that matters most: what the hook actually wrote, decoded by the app.
 if CommandLine.arguments.count > 1 {
     print("  limits.json written by the hook")
