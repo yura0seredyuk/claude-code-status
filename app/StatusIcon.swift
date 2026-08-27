@@ -3,7 +3,7 @@ import AppKit
 // ---------------------------------------------------------------------------
 // Status model + menu bar icon drawing.
 //
-// Kept in its own file so tools/render-icons.swift can compile the exact same
+// Kept in its own file so tools/render-icons/ can compile the exact same
 // drawing code and dump a preview sheet.
 // ---------------------------------------------------------------------------
 

@@ -5,7 +5,7 @@
 // renders. Run with --statusline it acts as a `statusLine` command instead,
 // folding the account's plan usage windows into limits.json.
 //
-// A Swift port of what was hook/statuslamp-hook.py, kept deliberately close
+// A Swift port of the Python hook this replaced, kept deliberately close
 // to it - same file formats, same locking, same semantics - for two reasons:
 // end users no longer need /usr/bin/python3 (which on a Mac without the Xcode
 // Command Line Tools pops an install dialog), and this runs on every single
