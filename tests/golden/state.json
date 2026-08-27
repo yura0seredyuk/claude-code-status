@@ -1,0 +1,59 @@
+{
+  "s1": {
+    "background": false,
+    "consecutive_failures": 0,
+    "cwd": "/tmp/proj",
+    "detail": "готово ✓",
+    "entrypoint": "cli",
+    "errors_total": 2,
+    "last_error": {
+      "message": "5h limit",
+      "tool": "Rate limit"
+    },
+    "last_event": "Stop",
+    "last_message": "готово ✓",
+    "project": "proj",
+    "session_id": "s1",
+    "status": "done",
+    "tool": "",
+    "tool_count": 2,
+    "waiting_reason": ""
+  },
+  "s2": {
+    "background": false,
+    "consecutive_failures": 0,
+    "cwd": "/tmp/other",
+    "detail": "Interrupted",
+    "entrypoint": "cli",
+    "errors_total": 0,
+    "last_error": null,
+    "last_event": "SessionStart",
+    "last_message": "",
+    "project": "other",
+    "session_id": "s2",
+    "status": "done",
+    "tool": "Task",
+    "tool_count": 1,
+    "waiting_reason": ""
+  },
+  "s4": {
+    "background": false,
+    "consecutive_failures": 1,
+    "cwd": "/tmp/failing",
+    "detail": "gave up",
+    "entrypoint": "cli",
+    "errors_total": 1,
+    "last_error": {
+      "message": "exit 1",
+      "tool": "Bash"
+    },
+    "last_event": "Stop",
+    "last_message": "gave up",
+    "project": "failing",
+    "session_id": "s4",
+    "status": "error",
+    "tool": "",
+    "tool_count": 0,
+    "waiting_reason": ""
+  }
+}

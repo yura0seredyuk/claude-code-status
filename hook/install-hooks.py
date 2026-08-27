@@ -4,10 +4,10 @@
 Idempotent: every entry it writes is tagged with MARKER, so re-running replaces
 its own entries and leaves hooks installed by anything else untouched.
 
-    install-hooks.py [python]              hooks + the statusLine that feeds
-                                           the plan usage rows
-    install-hooks.py [python] --no-limits  hooks only, statusLine slot given back
-    install-hooks.py --uninstall           remove both
+    install-hooks.py               hooks + the statusLine that feeds the plan
+                                   usage rows
+    install-hooks.py --no-limits   hooks only, statusLine slot given back
+    install-hooks.py --uninstall   remove both
 """
 
 import json
@@ -20,7 +20,9 @@ import time
 HOME = os.path.expanduser("~")
 SETTINGS = os.path.join(HOME, ".claude", "settings.json")
 LIMITS = os.path.join(HOME, ".claude", "claude-status", "limits.json")
-MARKER = "claude-status/hook.py"
+# Matches both the compiled hook and the Python one earlier versions installed,
+# so an upgrade strips the old entries instead of running two hooks.
+MARKER = "claude-status/hook"
 
 # matcher=None -> the event takes no matcher
 EVENTS = [
@@ -85,11 +87,11 @@ def strip_ours(settings):
 # line. And no `|| true` - the script already exits 0 on every path, whereas a
 # genuinely broken interpreter should show up in `claude --debug` as a non-zero
 # exit rather than as a mysteriously empty row.
-def statusline_command(python, hook):
+def statusline_command(hook):
     # shlex, not bare quotes: /bin/sh -c runs this, and a home directory
     # containing $ or " would otherwise mangle or fail to parse the command -
     # and a non-zero exit blanks the status line row permanently.
-    return "%s %s --statusline" % (shlex.quote(python), shlex.quote(hook))
+    return "%s --statusline" % shlex.quote(hook)
 
 
 def apply_statusline(settings, command, mode):
@@ -163,16 +165,14 @@ def main():
         shutil.copy2(SETTINGS, backup)
         print("  backup: %s" % backup)
 
-    python = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else sys.executable
-    hook = os.path.join(HOME, ".claude", "claude-status", "hook.py")
+    hook = os.path.join(HOME, ".claude", "claude-status", "hook")
 
     strip_ours(settings)
     if not uninstall:
         # Silenced and forced to succeed: a status indicator must never be able
         # to disturb a Claude Code session.
-        add_ours(settings, "%s %s >/dev/null 2>&1 || true"
-                 % (shlex.quote(python), shlex.quote(hook)))
-    note = apply_statusline(settings, statusline_command(python, hook), limits)
+        add_ours(settings, "%s >/dev/null 2>&1 || true" % shlex.quote(hook))
+    note = apply_statusline(settings, statusline_command(hook), limits)
 
     # Resolved first: os.replace renames the symlink itself, so writing through
     # SETTINGS directly would turn a settings.json symlinked into a dotfiles

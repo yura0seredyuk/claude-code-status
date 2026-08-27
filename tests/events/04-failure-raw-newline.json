@@ -1,0 +1,2 @@
+{"hook_event_name":"PostToolUseFailure","session_id":"s1","tool_name":"Bash","error":"Exit code 9
+oops raw newline"}

@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import ServiceManagement
 import UserNotifications
 
 // ---------------------------------------------------------------------------
@@ -95,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
         center.delegate = self
         center.requestAuthorization(options: [.alert]) { _, _ in }
 
+        migrateLegacyLoginItem()
         reload(force: true)
 
         pollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -390,7 +392,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
                                 action: #selector(toggleLimitInMenuBar)))
         }
         menu.addItem(toggle("Show background sessions", on: showBackground, action: #selector(toggleBackground)))
-        menu.addItem(toggle("Open at login", on: launchAtLoginEnabled(), action: #selector(toggleLaunchAtLogin)))
+        // Only the user can clear a "requires approval" state, so say so rather
+        // than offering a switch that silently refuses to move.
+        menu.addItem(toggle(loginItemStatus == .requiresApproval
+                                ? "Open at login — approve in System Settings"
+                                : "Open at login",
+                            on: launchAtLoginEnabled(), action: #selector(toggleLaunchAtLogin)))
         menu.addItem(.separator())
         menu.addItem(item("Test alert", action: #selector(testAlert)))
         menu.addItem(item("Clear finished", action: #selector(dismissFinished)))
@@ -572,45 +579,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
     @objc private func quit() { NSApp.terminate(nil) }
 
     // MARK: launch at login
+    //
+    // SMAppService rather than a hand-written LaunchAgent plist: it is the
+    // supported route on macOS 13+, it survives the app moving, and it can say
+    // "the user switched this off in System Settings" - a state a plist on disk
+    // cannot represent, which is why the old code could show a tick for a login
+    // item that was never going to fire.
 
-    private var agentPlistURL: URL {
+    private var loginItemStatus: SMAppService.Status { SMAppService.mainApp.status }
+
+    private func launchAtLoginEnabled() -> Bool { loginItemStatus == .enabled }
+
+    /// Where earlier versions wrote the login item by hand. Kept only to migrate
+    /// off it: with both the plist and a registration in place, macOS launches
+    /// two copies of the app at login.
+    private var legacyAgentPlistURL: URL {
         URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/LaunchAgents/\(launchAgentLabel).plist")
     }
 
-    private func launchAtLoginEnabled() -> Bool {
-        FileManager.default.fileExists(atPath: agentPlistURL.path)
+    /// Registering first and deleting second keeps the user's setting. If the
+    /// registration fails the plist stays: silently losing "open at login" is
+    /// worse than the duplicate launch it was meant to prevent.
+    private func migrateLegacyLoginItem() {
+        guard FileManager.default.fileExists(atPath: legacyAgentPlistURL.path) else { return }
+        if loginItemStatus != .enabled {
+            do { try SMAppService.mainApp.register() } catch { return }
+        }
+        try? FileManager.default.removeItem(at: legacyAgentPlistURL)
     }
 
-    /// Enabling and disabling only writes or removes the LaunchAgent plist.
-    /// launchd loads ~/Library/LaunchAgents at login by itself, so there is no
-    /// reason to bootstrap the job here - doing that would start a SECOND copy
-    /// of an already running app, and the matching `bootout` on disable would
-    /// terminate the very instance the user is clicking in.
     @objc private func toggleLaunchAtLogin() {
-        if launchAtLoginEnabled() {
-            try? FileManager.default.removeItem(at: agentPlistURL)
-            return
-        }
-        // Bundle path: .../Claude Status.app/Contents/MacOS/ClaudeStatus
-        let executable = Bundle.main.executablePath ?? CommandLine.arguments[0]
-        let plist: [String: Any] = [
-            "Label": launchAgentLabel,
-            "ProgramArguments": [executable],
-            "RunAtLoad": true,
-            "KeepAlive": false,
-            "ProcessType": "Interactive",
-        ]
         do {
-            try FileManager.default.createDirectory(
-                at: agentPlistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let data = try PropertyListSerialization.data(
-                fromPropertyList: plist, format: .xml, options: 0)
-            try data.write(to: agentPlistURL)
+            if launchAtLoginEnabled() {
+                try SMAppService.mainApp.unregister()
+            } else {
+                try SMAppService.mainApp.register()
+            }
         } catch {
-            NSSound.beep()
+            // Nearly always because the user turned the item off in System
+            // Settings, and only they can turn it back on. Take them there
+            // instead of beeping at them.
+            SMAppService.openSystemSettingsLoginItems()
         }
     }
+}
+
+// uninstall.sh runs --unregister-login-item before deleting the bundle: an
+// SMAppService registration outlives the app it points at, and would otherwise
+// sit in System Settings as an orphan the user has to clear by hand. The
+// opposite direction exists so that a script which took the setting away can
+// put it back - a reinstall should not quietly cost the user a preference.
+if CommandLine.arguments.contains("--unregister-login-item") {
+    try? SMAppService.mainApp.unregister()
+    try? FileManager.default.removeItem(
+        at: URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/LaunchAgents/\(launchAgentLabel).plist"))
+    exit(0)
+}
+if CommandLine.arguments.contains("--register-login-item") {
+    do { try SMAppService.mainApp.register() } catch { exit(1) }
+    exit(0)
 }
 
 let application = NSApplication.shared
