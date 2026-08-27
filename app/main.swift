@@ -11,7 +11,10 @@ import UserNotifications
 // App
 // ---------------------------------------------------------------------------
 
-let launchAgentLabel = "com.claudestatus.agent"
+/// Names the LaunchAgent plist that versions before SMAppService wrote by hand.
+/// It is deliberately the old identifier: the only thing left to do with that
+/// file is find it and delete it.
+let legacyAgentLabel = "com.claudestatus.agent"
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
                          UNUserNotificationCenterDelegate {
@@ -20,9 +23,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
     private let defaults = UserDefaults.standard
 
     private let stateURL = URL(fileURLWithPath: NSHomeDirectory())
-        .appendingPathComponent(".claude/claude-status/state.json")
+        .appendingPathComponent(".claude/statuslamp/state.json")
     private let limitsURL = URL(fileURLWithPath: NSHomeDirectory())
-        .appendingPathComponent(".claude/claude-status/limits.json")
+        .appendingPathComponent(".claude/statuslamp/limits.json")
     /// Claude Code's own config, read for one key: the per-model weekly windows
     /// it caches there whenever you open /usage.
     private let usageCacheURL = URL(fileURLWithPath: NSHomeDirectory())
@@ -99,6 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
         center.delegate = self
         center.requestAuthorization(options: [.alert]) { _, _ in }
 
+        migratePreferences()
         migrateLegacyLoginItem()
         reload(force: true)
 
@@ -451,7 +455,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
             "Claude Code sent " + plural(unhandled.count, "event", "events") + " this build does not handle",
             tip: names + (unhandled.count > 4 ? ", …" : "")
                + "\n\nClaude Code's hook protocol changed. Some of what the icon "
-               + "shows may be wrong or missing until Claude Status is updated."))
+               + "shows may be wrong or missing until Statuslamp is updated."))
     }
 
     /// Shown only once limits.json exists: an install that never asked for plan
@@ -571,7 +575,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
         if soundEnabled { sounds[.done]?.play() }
         guard notificationsEnabled, Bundle.main.bundleIdentifier != nil else { return }
         let content = UNMutableNotificationContent()
-        content.title = "Claude Status — Test alert"
+        content.title = "Statuslamp — Test alert"
         content.body = "Notifications and sound are working."
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
@@ -606,6 +610,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
     // cannot represent, which is why the old code could show a tick for a login
     // item that was never going to fire.
 
+    /// The app was called Claude Status until it was renamed, and preferences
+    /// live under the bundle identifier. Without this, everyone who had it
+    /// installed silently loses their switches on upgrade.
+    private func migratePreferences() {
+        let keys = ["sound", "notifications", "limitAlerts", "showBackground",
+                    "showLimitInMenuBar", "dismissedBefore"]
+        guard keys.allSatisfy({ defaults.object(forKey: $0) == nil }),
+              let old = UserDefaults(suiteName: "com.claudestatus.menubar") else { return }
+        var moved = false
+        for key in keys {
+            guard let value = old.object(forKey: key) else { continue }
+            defaults.set(value, forKey: key)
+            moved = true
+        }
+        if moved { defaults.synchronize() }
+    }
+
     private var loginItemStatus: SMAppService.Status { SMAppService.mainApp.status }
 
     private func launchAtLoginEnabled() -> Bool { loginItemStatus == .enabled }
@@ -615,7 +636,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
     /// two copies of the app at login.
     private var legacyAgentPlistURL: URL {
         URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Library/LaunchAgents/\(launchAgentLabel).plist")
+            .appendingPathComponent("Library/LaunchAgents/\(legacyAgentLabel).plist")
     }
 
     /// Registering first and deleting second keeps the user's setting. If the
@@ -654,7 +675,7 @@ if CommandLine.arguments.contains("--unregister-login-item") {
     try? SMAppService.mainApp.unregister()
     try? FileManager.default.removeItem(
         at: URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Library/LaunchAgents/\(launchAgentLabel).plist"))
+            .appendingPathComponent("Library/LaunchAgents/\(legacyAgentLabel).plist"))
     exit(0)
 }
 if CommandLine.arguments.contains("--register-login-item") {

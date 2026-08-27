@@ -1,11 +1,11 @@
 // Claude Code -> menu bar status bridge.
 //
 // Reads one hook event on stdin and folds it into
-// ~/.claude/claude-status/state.json, which the Claude Status menu bar app
+// ~/.claude/statuslamp/state.json, which the Statuslamp menu bar app
 // renders. Run with --statusline it acts as a `statusLine` command instead,
 // folding the account's plan usage windows into limits.json.
 //
-// A Swift port of what was hook/claude-status-hook.py, kept deliberately close
+// A Swift port of what was hook/statuslamp-hook.py, kept deliberately close
 // to it - same file formats, same locking, same semantics - for two reasons:
 // end users no longer need /usr/bin/python3 (which on a Mac without the Xcode
 // Command Line Tools pops an install dialog), and this runs on every single
@@ -27,7 +27,7 @@ let home: String = {
     if let value = ProcessInfo.processInfo.environment["HOME"], !value.isEmpty { return value }
     return NSHomeDirectory()
 }()
-let base = home + "/.claude/claude-status"
+let base = home + "/.claude/statuslamp"
 let statePath = base + "/state.json"
 let lockPath = base + "/state.lock"
 let limitsPath = base + "/limits.json"

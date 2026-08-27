@@ -1,6 +1,10 @@
-# Claude Status
+# Statuslamp
 
 A macOS menu bar icon that shows what Claude Code is doing in your terminal.
+
+> Statuslamp is an independent project. It is not created by, affiliated with,
+> endorsed by, or supported by Anthropic. Claude and Claude Code are trademarks
+> of Anthropic.
 
 ```
 ◜◝  Working          blue ring, spinning
@@ -35,7 +39,7 @@ started.
 
 macOS asks for notification permission the first time the app runs. If you
 dismissed that prompt, switch it back on in System Settings → Notifications →
-Claude Status.
+Statuslamp.
 
 ## Plan usage limits
 
@@ -96,11 +100,11 @@ then fan it out:
 
 ```sh
 input=$(cat)
-printf '%s' "$input" | /usr/bin/python3 "$HOME/.claude/claude-status/hook.py" --statusline >/dev/null 2>&1
+printf '%s' "$input" | /usr/bin/python3 "$HOME/.claude/statuslamp/hook.py" --statusline >/dev/null 2>&1
 printf '%s' "$input" | <the rest of your status line>
 ```
 
-Claude Status never wraps or rewrites a status line it did not write. Chaining
+Statuslamp never wraps or rewrites a status line it did not write. Chaining
 would put a Python start in front of yours on every redraw, swallow your script's
 exit code, and leave a restore path that a failed uninstall could strand.
 
@@ -146,7 +150,7 @@ widget must not be able to log you out.
 ```
 
 Builds the app, puts it in `/Applications`, copies the hook into
-`~/.claude/claude-status/` and adds the hooks to `~/.claude/settings.json`
+`~/.claude/statuslamp/` and adds the hooks to `~/.claude/settings.json`
 (backing it up first), plus the `statusLine` that feeds the plan usage rows.
 Re-running is safe — it never duplicates entries.
 
@@ -169,15 +173,15 @@ never going to fire.
 
 Strips the hooks out of `settings.json` (leaving anyone else's hooks alone, and
 the `statusLine` too unless it is ours), removes the launch agent, the app and
-`~/.claude/claude-status/`.
+`~/.claude/statuslamp/`.
 
 ## How it works
 
 Claude Code can run external commands on session events. The hook
 (`hook/main.swift`, compiled into the app bundle and copied to
-`~/.claude/claude-status/hook` at install time) receives each event as JSON on
+`~/.claude/statuslamp/hook` at install time) receives each event as JSON on
 stdin, folds it into a single state file at
-`~/.claude/claude-status/state.json`, and the app re-reads that file twice a
+`~/.claude/statuslamp/state.json`, and the app re-reads that file twice a
 second and draws the icon.
 
 It is copied out of the bundle rather than run from inside it so that the
@@ -338,7 +342,7 @@ update the existing record instead of adding one.
 ```
 app/StatusIcon.swift        states, icon drawing, menu text
 app/main.swift              menu, state reading, open at login
-app/build.sh                builds Claude Status.app (no Xcode project)
+app/build.sh                builds Statuslamp.app (no Xcode project)
 app/AppIcon.icns            generated app icon, regenerated when stale
 hook/main.swift             events → state.json, --statusline → limits.json
 hook/install-hooks.py       edits ~/.claude/settings.json (hooks + statusLine)
@@ -380,7 +384,7 @@ error-on-stop branch or disabling the lenient JSON parsing each make it fail.
 Iterating without a full reinstall:
 
 ```bash
-./app/build.sh && open "app/build/Claude Status.app"   # app only
+./app/build.sh && open "app/build/Statuslamp.app"   # app only
 swiftc -swift-version 5 app/StatusIcon.swift tools/render-icons/main.swift \
     -o /tmp/render && /tmp/render                       # icon preview
 /usr/bin/python3 tools/demo-state.py --limits           # fake sessions + limits
@@ -396,7 +400,11 @@ below 32pt the strokes and gaps widen so the segments do not smear together.
 `build.sh` regenerates `app/AppIcon.icns` whenever the generator is newer.
 
 Hook diagnostics: `CLAUDE_STATUS_DEBUG=1` writes a log to
-`~/.claude/claude-status/hook.log`.
+`~/.claude/statuslamp/hook.log`.
+
+## Licence
+
+MIT — see [LICENSE](LICENSE).
 
 ## Requirements
 

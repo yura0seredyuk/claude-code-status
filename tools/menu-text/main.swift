@@ -2,7 +2,7 @@
 // live state.json.  swiftc app/StatusIcon.swift tools/menu-text/main.swift
 import AppKit
 
-let path = NSHomeDirectory() + "/.claude/claude-status/state.json"
+let path = NSHomeDirectory() + "/.claude/statuslamp/state.json"
 guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
     print("no state.json"); exit(0)
 }
@@ -34,7 +34,7 @@ if !unhandled.isEmpty {
     print("      \(unhandled.joined(separator: ", "))")
 }
 
-let limitsPath = NSHomeDirectory() + "/.claude/claude-status/limits.json"
+let limitsPath = NSHomeDirectory() + "/.claude/statuslamp/limits.json"
 if let data = try? Data(contentsOf: URL(fileURLWithPath: limitsPath)),
    let limits = try? decoder.decode(LimitsFile.self, from: data) {
     print(String(repeating: "─", count: 46))

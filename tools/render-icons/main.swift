@@ -61,6 +61,6 @@ guard let tiff = sheet.tiffRepresentation,
     FileHandle.standardError.write("render failed\n".data(using: .utf8)!)
     exit(1)
 }
-let out = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "/tmp/claude-status-icons.png"
+let out = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "/tmp/statuslamp-icons.png"
 try! png.write(to: URL(fileURLWithPath: out))
 print(out)

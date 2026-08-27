@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Adds (or removes) the Claude Status hooks in ~/.claude/settings.json.
+"""Adds (or removes) the Statuslamp hooks in ~/.claude/settings.json.
 
-Idempotent: every entry it writes is tagged with MARKER, so re-running replaces
+Idempotent: every entry it writes is tagged, so re-running replaces
 its own entries and leaves hooks installed by anything else untouched.
 
     install-hooks.py               hooks + the statusLine that feeds the plan
@@ -19,10 +19,15 @@ import time
 
 HOME = os.path.expanduser("~")
 SETTINGS = os.path.join(HOME, ".claude", "settings.json")
-LIMITS = os.path.join(HOME, ".claude", "claude-status", "limits.json")
-# Matches both the compiled hook and the Python one earlier versions installed,
-# so an upgrade strips the old entries instead of running two hooks.
-MARKER = "claude-status/hook"
+LIMITS = os.path.join(HOME, ".claude", "statuslamp", "limits.json")
+# Every path this project has ever registered a hook at. An upgrade has to
+# recognise its own older entries - the Python script, and everything installed
+# under the previous name - or the session ends up running two hooks.
+MARKERS = ("statuslamp/hook", "claude-status/hook")
+
+
+def ours(command):
+    return any(marker in str(command) for marker in MARKERS)
 
 # matcher=None -> the event takes no matcher
 EVENTS = [
@@ -70,7 +75,7 @@ def strip_ours(settings):
                 continue
             entries = [
                 e for e in entries
-                if not (isinstance(e, dict) and MARKER in str(e.get("command", "")))
+                if not (isinstance(e, dict) and ours(e.get("command", "")))
             ]
             if entries:
                 group["hooks"] = entries
@@ -103,10 +108,10 @@ def apply_statusline(settings, command, mode):
     could strand."""
     existing = settings.get("statusLine")
     current = existing.get("command", "") if isinstance(existing, dict) else None
-    ours = current is not None and MARKER in current and "--statusline" in current
+    mine = current is not None and ours(current) and "--statusline" in current
 
     if mode == "off":
-        if ours:
+        if mine:
             settings.pop("statusLine", None)
             # Nothing will refresh limits.json again, and a file left behind
             # would keep the app showing rows - and switches for them - for a
@@ -117,21 +122,21 @@ def apply_statusline(settings, command, mode):
                 pass
             return "plan limits: statusLine entry removed"
         return None
-    if current is not None and not ours:
+    if current is not None and not mine:
         if mode == "keep":
             return None
         # Their script, their edit, their decision: no wrapper to uninstall, no
         # recursion when install.sh is re-run, no collision with /statusline.
         return ("plan limits: NOT enabled - statusLine is already taken by\n"
                 "    %s\n"
-                "  Claude Status will not overwrite it. To feed it too, read stdin\n"
+                "  Statuslamp will not overwrite it. To feed it too, read stdin\n"
                 "  once at the top of your own script and fan it out:\n"
                 "    input=$(cat)\n"
                 "    printf '%%s' \"$input\" | %s >/dev/null 2>&1\n"
                 "    printf '%%s' \"$input\" | <the rest of your status line>"
                 % (current, command))
     if mode == "keep":
-        if not ours:
+        if not mine:
             return None
         settings["statusLine"] = {"type": "command", "command": command}
         return "plan limits: still on"
@@ -165,7 +170,7 @@ def main():
         shutil.copy2(SETTINGS, backup)
         print("  backup: %s" % backup)
 
-    hook = os.path.join(HOME, ".claude", "claude-status", "hook")
+    hook = os.path.join(HOME, ".claude", "statuslamp", "hook")
 
     strip_ours(settings)
     if not uninstall:

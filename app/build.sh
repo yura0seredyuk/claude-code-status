@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds "Claude Status.app" from two Swift files - no Xcode project needed.
+# Builds "Statuslamp.app" from two Swift files - no Xcode project needed.
 #
 #   ./build.sh [outdir]
 #
@@ -14,8 +14,8 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="${1:-$HERE/build}"
-APP="$OUT/Claude Status.app"
-BIN="$APP/Contents/MacOS/ClaudeStatus"
+APP="$OUT/Statuslamp.app"
+BIN="$APP/Contents/MacOS/Statuslamp"
 
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 SHORT_VERSION="${VERSION:-1.0}"
@@ -24,7 +24,7 @@ SHORT_VERSION="${VERSION:-1.0}"
 BUILD_NUMBER="$(git -C "$HERE" rev-list --count HEAD 2>/dev/null || echo 1)"
 YEAR="$(date +%Y)"
 AUTHOR="${COPYRIGHT_HOLDER:-$(git -C "$HERE" config user.name 2>/dev/null || true)}"
-AUTHOR="${AUTHOR:-Claude Status contributors}"
+AUTHOR="${AUTHOR:-Statuslamp contributors}"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -38,13 +38,13 @@ for arch in arm64 x86_64; do
     swiftc -swift-version 5 -O \
         -target "${arch}-apple-macosx13.0" \
         -framework AppKit -framework UserNotifications -framework ServiceManagement \
-        -o "$SLICES/ClaudeStatus-$arch" \
+        -o "$SLICES/Statuslamp-$arch" \
         "$HERE/StatusIcon.swift" "$HERE/main.swift"
 done
-lipo -create "$SLICES"/ClaudeStatus-* -output "$BIN"
+lipo -create "$SLICES"/Statuslamp-* -output "$BIN"
 
 # The hook Claude Code runs on every tool call. It ships inside the bundle and
-# install.sh copies it out to ~/.claude/claude-status/, so the registered hook
+# install.sh copies it out to ~/.claude/statuslamp/, so the registered hook
 # keeps working when the app is moved, quit or updated.
 echo "Compiling the hook…"
 mkdir -p "$APP/Contents/Helpers"
@@ -54,8 +54,8 @@ for arch in arm64 x86_64; do
         -o "$SLICES/hook-$arch" \
         "$HERE/../hook/main.swift"
 done
-lipo -create "$SLICES"/hook-* -output "$APP/Contents/Helpers/claude-status-hook"
-chmod +x "$APP/Contents/Helpers/claude-status-hook"
+lipo -create "$SLICES"/hook-* -output "$APP/Contents/Helpers/statuslamp-hook"
+chmod +x "$APP/Contents/Helpers/statuslamp-hook"
 
 # The .icns is generated from tools/make-icon; rebuild it when it is missing or
 # older than the generator, so the icon always matches the source.
@@ -76,10 +76,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>            <string>Claude Status</string>
-    <key>CFBundleDisplayName</key>     <string>Claude Status</string>
-    <key>CFBundleIdentifier</key>      <string>com.claudestatus.menubar</string>
-    <key>CFBundleExecutable</key>      <string>ClaudeStatus</string>
+    <key>CFBundleName</key>            <string>Statuslamp</string>
+    <key>CFBundleDisplayName</key>     <string>Statuslamp</string>
+    <key>CFBundleIdentifier</key>      <string>io.github.yura0seredyuk.statuslamp</string>
+    <key>CFBundleExecutable</key>      <string>Statuslamp</string>
     <key>CFBundleIconFile</key>        <string>AppIcon</string>
     <key>CFBundlePackageType</key>     <string>APPL</string>
     <key>CFBundleShortVersionString</key> <string>$SHORT_VERSION</string>
@@ -109,7 +109,7 @@ PLIST
 # finding that out at build time is the entire point.
 # Nested code first, bundle second: codesign seals what it finds, and a helper
 # signed after the bundle invalidates the bundle's own seal.
-for target in "$APP/Contents/Helpers/claude-status-hook" "$APP"; do
+for target in "$APP/Contents/Helpers/statuslamp-hook" "$APP"; do
     if [ "$SIGN_IDENTITY" = "-" ]; then
         codesign --force --options runtime --timestamp=none --sign - "$target"
     else

@@ -76,7 +76,7 @@ json.dump({"sessions": out, "events": events}, sys.stdout,
           indent=2, sort_keys=True, ensure_ascii=False)
 '
 GOLDEN="$HERE/golden/state.json"
-STATE="$H1/.claude/claude-status/state.json"
+STATE="$H1/.claude/statuslamp/state.json"
 "$PY" -c "$NORMALISE" "$STATE" > "$WORK/actual.json"
 if [ "$UPDATE" = "1" ]; then
     cp "$WORK/actual.json" "$GOLDEN"
@@ -156,7 +156,7 @@ is "empty stdin keeps the line" "$LAST" "$BOTH"
 # number must not refresh an "as of" it did not earn.
 "$PY" - "$H2" <<'PY'
 import json, os, sys, time
-p = os.path.join(sys.argv[1], ".claude/claude-status/limits.json")
+p = os.path.join(sys.argv[1], ".claude/statuslamp/limits.json")
 d = json.load(open(p))
 d["windows"]["five_hour"]["captured_at"] = time.time() - 4000
 d["updated_at"] = 0
@@ -165,17 +165,17 @@ PY
 sl "{\"session_id\":\"A\",\"rate_limits\":{\"five_hour\":{\"used_percentage\":1.0,\"resets_at\":$EARLIER}}}"
 AGE=$("$PY" -c "
 import json, time
-w = json.load(open('$H2/.claude/claude-status/limits.json'))['windows']['five_hour']
+w = json.load(open('$H2/.claude/statuslamp/limits.json'))['windows']['five_hour']
 print('kept' if time.time() - w['captured_at'] > 3000 else 'refreshed')")
 is "a losing sample keeps the old stamp" "$AGE" "kept"
 
 # ---------------------------------------------------------------------------
 echo "Write amplification"
-BEFORE=$(stat -f %m "$H2/.claude/claude-status/limits.json")
+BEFORE=$(stat -f %m "$H2/.claude/statuslamp/limits.json")
 for _ in $(seq 1 30); do
     sl "{\"session_id\":\"B\",\"rate_limits\":{\"five_hour\":{\"used_percentage\":3.0,\"resets_at\":$EARLIER}}}"
 done
-AFTER=$(stat -f %m "$H2/.claude/claude-status/limits.json")
+AFTER=$(stat -f %m "$H2/.claude/statuslamp/limits.json")
 is "30 identical runs rewrite nothing" "$([ "$BEFORE" = "$AFTER" ] && echo same || echo rewritten)" "same"
 
 # ---------------------------------------------------------------------------
@@ -186,21 +186,21 @@ for i in $(seq 1 30); do
         | HOME="$H3" "$HOOK" &
 done
 wait
-PARALLEL=$("$PY" -c "import json;print(len([k for k in json.load(open('$H3/.claude/claude-status/state.json'))['sessions'] if k.startswith('c')]))")
+PARALLEL=$("$PY" -c "import json;print(len([k for k in json.load(open('$H3/.claude/statuslamp/state.json'))['sessions'] if k.startswith('c')]))")
 is "30 parallel hooks lose nothing" "$PARALLEL" "30"
 
 # Nothing may be left lying around when a write cannot land.
-H4="$WORK/h4"; mkdir -p "$H4/.claude/claude-status/limits.json"
+H4="$WORK/h4"; mkdir -p "$H4/.claude/statuslamp/limits.json"
 for _ in 1 2 3; do
     echo "{\"session_id\":\"x\",\"rate_limits\":{\"five_hour\":{\"used_percentage\":5.0,\"resets_at\":$A}}}" \
         | HOME="$H4" "$HOOK" --statusline >/dev/null
 done
-STRANDED=$(find "$H4/.claude/claude-status" -maxdepth 1 -name '*.tmp' | wc -l | tr -d ' ')
+STRANDED=$(find "$H4/.claude/statuslamp" -maxdepth 1 -name '*.tmp' | wc -l | tr -d ' ')
 is "an unwritable limits.json strands no temp files" "$STRANDED" "0"
 
 # ---------------------------------------------------------------------------
 echo "App-side formatting and decoding"
-"$SWIFT_TESTS" "$H2/.claude/claude-status/limits.json" || fail=$((fail+1))
+"$SWIFT_TESTS" "$H2/.claude/statuslamp/limits.json" || fail=$((fail+1))
 
 # ---------------------------------------------------------------------------
 echo

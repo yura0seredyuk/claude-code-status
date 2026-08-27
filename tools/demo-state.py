@@ -15,7 +15,7 @@ import os
 import sys
 import time
 
-BASE = os.path.expanduser("~/.claude/claude-status")
+BASE = os.path.expanduser("~/.claude/statuslamp")
 STATE = os.path.join(BASE, "state.json")
 LOCK = os.path.join(BASE, "state.lock")
 LIMITS = os.path.join(BASE, "limits.json")

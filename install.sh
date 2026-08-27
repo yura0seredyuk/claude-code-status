@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds and installs Claude Status: the menu bar app + the Claude Code hooks
+# Builds and installs Statuslamp: the menu bar app + the Claude Code hooks
 # that feed it. Safe to re-run.
 #
 #   ./install.sh              everything: the icon, and the plan usage limits
@@ -16,8 +16,8 @@ for arg in "$@"; do
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
 done
-STATUS_DIR="$HOME/.claude/claude-status"
-APP_NAME="Claude Status.app"
+STATUS_DIR="$HOME/.claude/statuslamp"
+APP_NAME="Statuslamp.app"
 
 if [ -w /Applications ]; then
     APP_DEST="/Applications"
@@ -54,14 +54,34 @@ echo "1/4 Building the app…"
 "$HERE/app/build.sh" "$HERE/app/build" >/dev/null
 
 echo "2/4 Installing into ${APP_DEST}…"
-pkill -f "$APP_NAME/Contents/MacOS/ClaudeStatus" 2>/dev/null || true
+pkill -f "$APP_NAME/Contents/MacOS/Statuslamp" 2>/dev/null || true
 sleep 0.3
 rm -rf "$APP_DEST/$APP_NAME"
 cp -R "$HERE/app/build/$APP_NAME" "$APP_DEST/$APP_NAME"
 
 echo "3/4 Installing the hook…"
+# The app was called Claude Status until it was renamed. Carry the state across
+# rather than starting from an empty file, and take the old login item with the
+# old bundle while it can still unregister itself - an SMAppService entry whose
+# app has been deleted sits in System Settings until the user clears it by hand.
+OLD_APP="Claude Status.app"
+OLD_DIR="$HOME/.claude/claude-status"
+for dir in /Applications "$HOME/Applications"; do
+    OLD_BINARY="$dir/$OLD_APP/Contents/MacOS/ClaudeStatus"
+    if [ -x "$OLD_BINARY" ]; then
+        "$OLD_BINARY" --unregister-login-item 2>/dev/null || true
+        pkill -f "$OLD_APP/Contents/MacOS/ClaudeStatus" 2>/dev/null || true
+        rm -rf "$dir/$OLD_APP"
+        echo "  removed the previous $OLD_APP"
+    fi
+done
+if [ -d "$OLD_DIR" ] && [ ! -d "$STATUS_DIR" ]; then
+    mv "$OLD_DIR" "$STATUS_DIR"
+    echo "  moved $OLD_DIR to $STATUS_DIR"
+fi
+
 mkdir -p "$STATUS_DIR"
-cp "$APP_DEST/$APP_NAME/Contents/Helpers/claude-status-hook" "$STATUS_DIR/hook"
+cp "$APP_DEST/$APP_NAME/Contents/Helpers/statuslamp-hook" "$STATUS_DIR/hook"
 chmod +x "$STATUS_DIR/hook"
 # Installs from before the hook was compiled left a Python script here. Nothing
 # points at it any more, and leaving it invites confusion about which one runs.
