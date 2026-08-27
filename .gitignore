@@ -26,3 +26,6 @@ __pycache__/
 # macOS
 .DS_Store
 ._*
+
+# release artefacts
+dist/

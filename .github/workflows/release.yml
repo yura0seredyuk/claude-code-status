@@ -1,0 +1,80 @@
+# Tag a commit and the disk image builds itself:
+#
+#   git tag v1.1 && git push origin v1.1
+#
+# Signing is optional and stays off until the repository has the secrets.
+# Without them the job still produces a working, ad-hoc-signed image - one that
+# macOS makes the downloader approve by hand in System Settings.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    env:
+      # Read once, here: the secrets context is not available to a step's `if`,
+      # only env is. "-" is codesign's ad-hoc identity.
+      SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY || '-' }}
+      HAS_NOTARY: ${{ secrets.NOTARY_APPLE_ID != '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # CFBundleVersion is `git rev-list --count HEAD` and the marketing
+          # version comes from the tag, so a shallow clone would ship the wrong
+          # numbers rather than fail loudly.
+          fetch-depth: 0
+
+      - name: Test
+        run: tests/run.sh
+
+      - name: Import the signing certificate
+        if: env.SIGN_IDENTITY != '-'
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/build.keychain"
+          PASSWORD="$(uuidgen)"
+          security create-keychain -p "$PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 900 "$KEYCHAIN"
+          security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+              -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+              -s -k "$PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      - name: Store the notary credentials
+        if: env.HAS_NOTARY == 'true'
+        env:
+          # Through the environment rather than interpolated into the script:
+          # a secret pasted into a shell line is a shell injection waiting for
+          # a value with a quote in it.
+          APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          APP_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          xcrun notarytool store-credentials statuslamp \
+              --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APP_PASSWORD"
+
+      - name: Build the disk image
+        run: |
+          if [ "$HAS_NOTARY" = "true" ]; then export NOTARY_PROFILE=statuslamp; fi
+          ./release.sh
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.dmg
+          generate_release_notes: true
+          fail_on_unmatched_files: true

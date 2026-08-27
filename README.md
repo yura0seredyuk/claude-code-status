@@ -165,6 +165,37 @@ Settings" — a login item the user has turned off there is a state a plist on
 disk cannot represent, so the old code showed a tick for something that was
 never going to fire.
 
+## Releasing
+
+```bash
+./release.sh
+```
+
+Builds a universal, hardened-runtime bundle, wraps it in a disk image with the
+drag-to-Applications symlink, and prints the SHA-256. The marketing version
+comes from the latest git tag, `CFBundleVersion` from the commit count, so a
+release cannot ship under whatever number was last typed by hand.
+
+Tagging does it on CI instead — `.github/workflows/release.yml` runs the tests,
+builds, and attaches the image to a GitHub release:
+
+```bash
+git tag v1.1 && git push origin v1.1
+```
+
+Signing is the one thing missing, and it is deliberate rather than forgotten:
+
+```bash
+SIGN_IDENTITY="Developer ID Application: NAME (TEAMID)" \
+NOTARY_PROFILE=statuslamp ./release.sh
+```
+
+Until then the image is ad-hoc signed and Gatekeeper rejects it. Since macOS 15
+there is no Control-click shortcut past that any more: whoever downloads it has
+to open System Settings → Privacy & Security and click "Open Anyway" once. That
+is fine among people who already trust you and a real drop-off for anyone else,
+which is the whole argument for the $99.
+
 ## Uninstall
 
 ```bash
