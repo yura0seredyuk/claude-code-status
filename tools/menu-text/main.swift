@@ -26,3 +26,24 @@ for r in records {
     print("\(r.isBackground ? "[bg] " : "")\(lines.title)")
     if !lines.subtitle.isEmpty { print("      \(lines.subtitle)") }
 }
+
+let limitsPath = NSHomeDirectory() + "/.claude/claude-status/limits.json"
+if let data = try? Data(contentsOf: URL(fileURLWithPath: limitsPath)),
+   let limits = try? decoder.decode(LimitsFile.self, from: data) {
+    print(String(repeating: "─", count: 46))
+    let now = Date().timeIntervalSince1970
+    let rows = LimitKind.allCases.filter { $0.window(limits)?.isLive(now) == true }
+    if rows.isEmpty {
+        print("Plan limits — " + limitPlaceholder(limits, now: now,
+                                                  sessionsLive: !records.isEmpty).text)
+    }
+    var all = rows.map { limitRow($0, $0.window(limits)!) }
+    if let data = try? Data(contentsOf: URL(fileURLWithPath: NSHomeDirectory() + "/.claude.json")),
+       let config = try? decoder.decode(ClaudeConfigFile.self, from: data),
+       let cache = config.cachedUsageUtilization {
+        all += modelLimitRows(cache, now: now)
+    }
+    for row in all {
+        print("\(row.label)  \(row.percentText)  \(row.detail(now: now))")
+    }
+}

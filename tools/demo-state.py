@@ -4,8 +4,9 @@ eyeballed without waiting for a real Claude Code session to misbehave.
 
 Takes the same lock the hook does, so it merges instead of clobbering.
 
-    tools/demo-state.py           # add three demo sessions
-    tools/demo-state.py --clear   # remove them again
+    tools/demo-state.py            # add three demo sessions
+    tools/demo-state.py --limits   # also fake the plan usage windows
+    tools/demo-state.py --clear    # remove both again
 """
 
 import fcntl
@@ -17,6 +18,7 @@ import time
 BASE = os.path.expanduser("~/.claude/claude-status")
 STATE = os.path.join(BASE, "state.json")
 LOCK = os.path.join(BASE, "state.lock")
+LIMITS = os.path.join(BASE, "limits.json")
 PREFIX = "demo-"
 
 
@@ -60,14 +62,51 @@ def demo_sessions(now):
     }
 
 
+def demo_limits(now, used_5h=87.0, used_7d=41.0):
+    return {
+        "version": 1,
+        "updated_at": now,
+        "seen_at": now,
+        "first_seen_at": now - 3600,
+        "last_seen_at": now,
+        "rate_limits_seen": True,
+        "windows": {
+            "five_hour": {"used_percentage": used_5h, "resets_at": now + 4520,
+                          "captured_at": now, "session_id": PREFIX + "working"},
+            "seven_day": {"used_percentage": used_7d, "resets_at": now + 291600,
+                          "captured_at": now, "session_id": PREFIX + "working"},
+        },
+    }
+
+
+def write_limits(state):
+    tmp = LIMITS + ".demo.tmp"
+    with open(tmp, "w") as fh:
+        json.dump(state, fh, ensure_ascii=False)
+    os.replace(tmp, LIMITS)
+
+
 def main():
     clear = "--clear" in sys.argv
     only = None
+    used = None
     for arg in sys.argv[1:]:
         if arg.startswith("--status="):
             only = arg.split("=", 1)[1]
+        if arg.startswith("--limits="):
+            used = float(arg.split("=", 1)[1])
 
     os.makedirs(BASE, exist_ok=True)
+    if clear:
+        try:
+            os.remove(LIMITS)
+        except OSError:
+            pass
+    elif "--limits" in sys.argv or used is not None:
+        now = time.time()
+        write_limits(demo_limits(now) if used is None else demo_limits(now, used, used / 2))
+        print("limits: %s" % LIMITS)
+
     fd = os.open(LOCK, os.O_CREAT | os.O_RDWR, 0o644)
     fcntl.flock(fd, fcntl.LOCK_EX)
     try:

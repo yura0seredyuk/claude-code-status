@@ -17,7 +17,8 @@ but Claude is still working.
 
 Clicking the icon lists the sessions: project, what is running right now, how
 long the turn has taken, how many tool calls it made and the text of the last
-error. Clicking a session opens its folder in Finder.
+error. Clicking a session opens its folder in Finder. It also shows how much of
+your plan's 5-hour and weekly limits you have spent.
 
 ## Alerts
 
@@ -36,6 +37,108 @@ macOS asks for notification permission the first time the app runs. If you
 dismissed that prompt, switch it back on in System Settings → Notifications →
 Claude Status.
 
+## Plan usage limits
+
+The menu carries two rows for the account's usage windows:
+
+```
+▬▬▬▬▬▬░░  Session limit (5h)   87%  ·  resets in 1h 15m
+▬░░░░░░░  Weekly limit (7d)     9%  ·  resets in 3d 9h
+```
+
+The bar goes orange past 80% and red past 95%, and crossing either threshold
+alerts once per window — "Session limit (5h) — 87% used". **Limit alerts** and
+**Show usage in menu bar** (a percentage beside the icon) are switches in the
+menu; the second one is off by default.
+
+Per-model weekly windows appear underneath when there are any:
+
+```
+▬▬▬░░░░░  Fable (7d)          38%  ·  resets in 2d 7h  ·  as of 12m ago
+```
+
+These come from somewhere else, and the row says so by always carrying its age.
+The status line publishes only the two account-wide windows; per-model ones live
+in the `/api/oauth/usage` response, which Claude Code caches into
+`~/.claude.json` as `cachedUsageUtilization` **every time you open `/usage`** —
+and nowhere else. So the app reads that file (free, no credentials) rather than
+calling the endpoint itself, and the number is only as fresh as your last
+`/usage`. Past 24 hours the row is dropped rather than shown at whatever it said
+yesterday.
+
+A model you have not used has no window: the server sends it as 0% with a null
+reset time, and a bar that sits at zero forever is worse than no row, so nothing
+is drawn until the window actually opens.
+
+### What it costs, and how to decline
+
+Claude Code publishes these numbers in exactly one local place: the JSON it
+hands to the `statusLine` command. No hook event carries a usage field, there is
+no `claude usage` subcommand, no environment variable and no OTel metric.
+
+And `settings.json` has room for exactly one `statusLine` — it is a scalar, not
+a merged list like `hooks` — so this takes the bottom line of your terminal,
+where it prints `5h 87% · 7d 9%`. If you would rather keep that line for
+something else:
+
+```bash
+./install.sh --no-limits
+```
+
+That leaves the icon and the session rows exactly as they are and hands the slot
+back. Worth knowing before you decide: on an API-key, Bedrock or Vertex account
+the numbers never arrive at all (see below), so there the slot buys you nothing.
+
+If the slot is **already taken** by your own status line, the installer refuses
+to touch it — that is not a preference, it is not destroying a config you wrote —
+and prints what to add at the top of your own script instead. Read stdin once,
+then fan it out:
+
+```sh
+input=$(cat)
+printf '%s' "$input" | /usr/bin/python3 "$HOME/.claude/claude-status/hook.py" --statusline >/dev/null 2>&1
+printf '%s' "$input" | <the rest of your status line>
+```
+
+Claude Status never wraps or rewrites a status line it did not write. Chaining
+would put a Python start in front of yours on every redraw, swallow your script's
+exit code, and leave a restore path that a failed uninstall could strand.
+
+### What the numbers can and cannot tell you
+
+The status line runs **only while an interactive Claude Code terminal is on
+screen** — never for `claude -p`, the SDK or MCP. So a batch job can spend quota
+all afternoon without moving the bar, and with every terminal closed the number
+simply stands still. Any reading older than ten minutes therefore carries an
+"as of 4h ago" marker, and a window is dropped once its `resets_at` passes
+rather than shown at its pre-reset value.
+
+Each Claude Code process keeps its own copy of the figures, fed only by its own
+API responses, so shift-tabbing in a terminal that has been idle since morning
+re-fires its status line with this morning's number. Utilisation only climbs
+until a window resets, so within one window `limits.json` keeps the highest
+reading and discards anything lower as an older session's view — while a
+*different* reset time means a different window, or a different account after
+`/login`, and always wins. A window missing from a payload means "this process
+has not heard yet", never "the limit is gone" — a fresh terminal always reports
+one that way before its first API response — so absence never erases what is
+already known.
+
+Nothing in the payload identifies the account, so on a machine used with two of
+them the rows follow whichever one Claude Code talked to last.
+
+When there is nothing to show the row says which kind of nothing it is: *no
+reading yet* (Claude Code publishes these only after an API response, and never
+for API-key, Bedrock or Vertex sessions), *window reset*, *no Claude Code
+session running*, or *not updating* — the last one meaning something replaced
+the `statusLine` entry, which Claude Code's own `/statusline` command will do.
+
+Not done, deliberately: polling Anthropic's `/api/oauth/usage` directly. It
+needs the full `/login` credential from the keychain, and refreshing that token
+independently rotates it out from under Claude Code, whose `invalid_grant`
+handler then wipes the stored credential and demands a fresh `/login`. A status
+widget must not be able to log you out.
+
 ## Install
 
 ```bash
@@ -44,7 +147,8 @@ Claude Status.
 
 Builds the app, puts it in `/Applications`, copies the hook into
 `~/.claude/claude-status/` and adds the hooks to `~/.claude/settings.json`
-(backing it up first). Re-running is safe — it never duplicates entries.
+(backing it up first), plus the `statusLine` that feeds the plan usage rows.
+Re-running is safe — it never duplicates entries.
 
 **Hooks are read when a session starts**, so restart any Claude Code terminals
 that are already open before they start reporting.
@@ -61,8 +165,9 @@ kill the very instance whose menu you are clicking in.
 ./uninstall.sh
 ```
 
-Strips the hooks out of `settings.json` (leaving anyone else's hooks alone),
-removes the launch agent, the app and `~/.claude/claude-status/`.
+Strips the hooks out of `settings.json` (leaving anyone else's hooks alone, and
+the `statusLine` too unless it is ours), removes the launch agent, the app and
+`~/.claude/claude-status/`.
 
 ## How it works
 
@@ -86,6 +191,10 @@ Event → state mapping:
 | `Stop`               | **done**, or **error** if the last tool calls were failing  |
 | `StopFailure`        | **error** — API failure: rate limit, overload, auth         |
 | `SessionEnd`         | session drops off the list                                 |
+
+Plan usage limits arrive by a different route - the `statusLine` command, which
+the same script serves with `--statusline`, writing `limits.json` beside
+`state.json`.
 
 The icon turns red in two cases: the turn died on an API failure (`StopFailure`,
 which shows the reason in words, e.g. "Rate limit"), or the turn ended while the
@@ -120,6 +229,36 @@ logging hook; none of this is in the public documentation:
   `fork` — and `compact` arrives in the middle of a running turn.
 - `--settings <file>` **replaces** the global `hooks` block rather than merging
   into it.
+
+And about the status line, which is where the plan limits live:
+
+- `rate_limits` carries `five_hour` and `seven_day` only, each
+  `{used_percentage, resets_at}` with `resets_at` in unix epoch **seconds**. The
+  richer shape — `seven_day_opus`, `seven_day_sonnet`, `model_scoped`,
+  `extra_usage`, ISO timestamps — belongs to the SDK's experimental `get_usage`
+  control request and never appears here. The header table the status line is
+  built from has four entries (`5h`, `7d`, `7d_oi`, `overage`) and none of them
+  is per-model.
+- The same richer payload is cached to `~/.claude.json` under
+  `cachedUsageUtilization` — written at most once every 5 minutes, only when
+  `/usage` or an SDK `get_usage` runs, and treated as expired after an hour.
+  Its `resets_at` is an ISO 8601 string with **microseconds**, which
+  `ISO8601DateFormatter` rejects with or without `.withFractionalSeconds`;
+  dropping the fraction parses every shape the server sends.
+- The figures come from `anthropic-ratelimit-unified-*` response headers and are
+  cached per process, not on disk: absent until that process's first API
+  response, and absent forever for API-key, Bedrock and Vertex sessions.
+- A window disappears from the payload the moment its `resets_at` passes, and
+  Claude Code re-runs the status line one second later, so a rollover refreshes
+  even in an idle terminal.
+- The command re-runs on a 300 ms debounce whenever token usage, permission
+  mode, vim mode, model, fast mode, effort, thinking or PR status changes, and on
+  every new assistant message — several times a second during a streaming turn.
+  So the writer only rewrites `limits.json` when a number actually moved.
+- It has no `timeout` field of its own; it inherits the generic 10-minute hook
+  timeout. A non-zero exit makes Claude Code discard stdout and blank the row, so
+  `--statusline` exits 0 on every path, exactly like the hook.
+- Empty stdout does not fall back to a default status line — there isn't one.
 
 ### Why it cannot disturb Claude Code
 
@@ -171,8 +310,8 @@ app/StatusIcon.swift        states, icon drawing, menu text
 app/main.swift              menu, state reading, open at login
 app/build.sh                builds Claude Status.app (no Xcode project)
 app/AppIcon.icns            generated app icon, regenerated when stale
-hook/claude-status-hook.py  events → state.json
-hook/install-hooks.py       edits ~/.claude/settings.json
+hook/claude-status-hook.py  events → state.json, --statusline → limits.json
+hook/install-hooks.py       edits ~/.claude/settings.json (hooks + statusLine)
 tools/make-icon/            draws the app icon and writes the .iconset
 tools/render-icons/         dumps every menu bar icon state to a PNG sheet
 tools/menu-text/            prints the menu as text
@@ -185,7 +324,7 @@ Iterating without a full reinstall:
 ./app/build.sh && open "app/build/Claude Status.app"   # app only
 swiftc -swift-version 5 app/StatusIcon.swift tools/render-icons/main.swift \
     -o /tmp/render && /tmp/render                       # icon preview
-/usr/bin/python3 tools/demo-state.py                    # fake sessions
+/usr/bin/python3 tools/demo-state.py --limits           # fake sessions + limits
 /usr/bin/python3 tools/demo-state.py --clear
 
 swiftc -swift-version 5 tools/make-icon/main.swift -o /tmp/mk \

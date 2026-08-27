@@ -10,7 +10,7 @@ LABEL="com.claudestatus.agent"
 
 PYTHON="$( [ -x /usr/bin/python3 ] && echo /usr/bin/python3 || command -v python3 )"
 
-echo "Removing hooks…"
+echo "Removing hooks and the status line entry…"
 "$PYTHON" "$HERE/hook/install-hooks.py" --uninstall
 
 echo "Stopping the app…"

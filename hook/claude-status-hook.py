@@ -4,6 +4,9 @@
 Reads one hook event on stdin and folds it into ~/.claude/claude-status/state.json,
 which the ClaudeStatus menu bar app renders.
 
+Run with --statusline it acts as a Claude Code `statusLine` command instead,
+folding the account's plan usage windows into limits.json for the same app.
+
 Runs on every tool call, so it must be fast, silent and unable to break the
 session: it never writes to stdout (UserPromptSubmit stdout is injected into
 Claude's context) and always exits 0.
@@ -20,12 +23,25 @@ HOME = os.path.expanduser("~")
 BASE = os.path.join(HOME, ".claude", "claude-status")
 STATE = os.path.join(BASE, "state.json")
 LOCK = os.path.join(BASE, "state.lock")
+LIMITS = os.path.join(BASE, "limits.json")
+LIMITS_LOCK = os.path.join(BASE, "limits.lock")
 LOG = os.path.join(BASE, "hook.log")
 
 STATE_VERSION = 1
 MAX_SESSIONS = 60
 SESSION_TTL = 24 * 3600  # forget sessions untouched for a day
 LOCK_TIMEOUT = 1.5       # never stall a tool call for longer than this
+
+LIMITS_VERSION = 1
+# The status line sits in front of an on-screen UI element and fires several
+# times a second while a turn streams, so this path is stingier than the hook
+# one: never queue long behind another session, never rewrite an unchanged file.
+LIMITS_LOCK_TIMEOUT = 0.3
+LIMITS_HEARTBEAT = 60
+# The only two windows the status line payload carries. seven_day_opus,
+# model_scoped and the rest exist solely in the SDK's get_usage response.
+LIMIT_WINDOWS = (("five_hour", "5h"), ("seven_day", "7d"))
+INF = float("inf")
 
 
 def debug(msg):
@@ -91,6 +107,30 @@ def describe_tool(tool, args):
 # --------------------------------------------------------------------------
 # state file
 # --------------------------------------------------------------------------
+
+def lock(path, timeout):
+    """Exclusive flock, or None if someone else still holds it. Never waits
+    longer than `timeout`: no status file is worth stalling a session over."""
+    deadline = time.time() + timeout
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except IOError:
+            if time.time() > deadline:
+                os.close(fd)
+                return None
+            time.sleep(0.01)
+
+
+def unlock(fd):
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+    except Exception:
+        pass
+
 
 def blank_state():
     return {"version": STATE_VERSION, "updated_at": time.time(), "sessions": {}}
@@ -340,6 +380,227 @@ def apply_event(state, event):
 
 
 # --------------------------------------------------------------------------
+# plan usage limits
+#
+# Claude Code puts the account's rate-limit windows in the JSON it hands to the
+# `statusLine` command. That is the only local surface carrying them: no hook
+# event has a usage field, and neither does the subagent status line, the OTel
+# metrics or the injected environment. So the same script doubles as a status
+# line - it folds the numbers into limits.json for the app, and prints them for
+# the terminal whose slot it took.
+# --------------------------------------------------------------------------
+
+def blank_limits():
+    return {
+        "version": LIMITS_VERSION,
+        "updated_at": 0.0,
+        "seen_at": 0.0,        # last status line run, whatever it carried
+        "first_seen_at": 0.0,
+        "last_seen_at": 0.0,   # last run that actually carried rate_limits
+        "rate_limits_seen": False,
+        "windows": {},
+    }
+
+
+def load_limits():
+    try:
+        with open(LIMITS) as fh:
+            data = json.load(fh)
+        if isinstance(data, dict) and isinstance(data.get("windows"), dict):
+            state = blank_limits()
+            state.update(data)
+            return state
+    except Exception:
+        pass
+    return blank_limits()
+
+
+def _number(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if value != value or value == INF or value == -INF:  # NaN, +/-inf
+        return None
+    return float(value)
+
+
+def read_windows(payload, now):
+    """`rate_limits` is absent for API-key, Bedrock and Vertex sessions, and for
+    every session until its first API response: the numbers ride in on
+    anthropic-ratelimit-unified-* response headers, and each Claude Code process
+    keeps its own copy fed only by its own requests."""
+    limits = payload.get("rate_limits")
+    if not isinstance(limits, dict):
+        return {}
+    found = {}
+    for key, _ in LIMIT_WINDOWS:
+        window = limits.get(key)
+        if not isinstance(window, dict):
+            continue
+        used = _number(window.get("used_percentage"))
+        resets = _number(window.get("resets_at"))
+        # Claude Code drops a window the moment it resets, and a non-numeric
+        # utilisation would arrive as null. Either way there is nothing to show.
+        if used is None or resets is None or resets <= now:
+            continue
+        found[key] = {"used_percentage": used, "resets_at": int(resets)}
+    return found
+
+
+def pick_window(stored, fresh):
+    """Utilisation only climbs until the window resets, so within one window a
+    lower reading is an older session's stale view rather than a refund -
+    shift-tabbing in a terminal idle since morning re-fires its status line with
+    this morning's number. Taking the maximum kills that flicker.
+
+    Two *live* windows with different resets_at cannot be the same window,
+    though: a stale process reports the same fixed reset time, and an expired
+    one has already been filtered out. So a differing reset time means a new
+    generation or - after `/login` - a different account, and the fresh reading
+    wins in both directions. Without that, switching accounts would leave the
+    previous account's numbers on screen until its window ran out."""
+    if fresh is None:
+        return stored
+    if stored is None:
+        return fresh
+    if fresh["resets_at"] != stored["resets_at"]:
+        return fresh
+    if fresh["used_percentage"] >= stored["used_percentage"]:
+        return fresh
+    return stored
+
+
+def _digest(window):
+    if not isinstance(window, dict):
+        return None
+    return (round(window.get("used_percentage", 0), 1), window.get("resets_at"))
+
+
+def merge_limits(fresh, session_id, now):
+    """Folds one status line payload into limits.json and returns what the app
+    will see, so the terminal prints the same thing the menu bar shows."""
+    fd = lock(LIMITS_LOCK, LIMITS_LOCK_TIMEOUT)
+    if fd is None:
+        debug("limits lock busy")
+        return fresh
+    try:
+        state = load_limits()
+        stored = state.get("windows")
+        stored = stored if isinstance(stored, dict) else {}
+        merged = {}
+        changed = False
+
+        for key, _ in LIMIT_WINDOWS:
+            before = stored.get(key)
+            if not isinstance(before, dict) or before.get("resets_at", 0) <= now:
+                before = None            # rolled over while nothing was watching
+            sample = fresh.get(key)
+            chosen = pick_window(before, sample)
+            if chosen is None:
+                changed = changed or key in stored
+                continue
+            record = dict(chosen)
+            # A missing window means "this process has not heard yet", never
+            # "the limit is gone", so absence must not erase what we know. The
+            # timestamp is what lets the app admit the number may be hours old,
+            # so it follows the reading that actually WON: a stale session
+            # re-reporting an old number must not refresh a stamp it did not
+            # earn. pick_window returns the object it picked, so `is` is exact.
+            if chosen is sample:
+                record["captured_at"] = now
+                record["session_id"] = session_id or ""
+            else:
+                record["captured_at"] = (before or {}).get("captured_at", 0)
+                record["session_id"] = (before or {}).get("session_id", "")
+            merged[key] = record
+            changed = changed or _digest(before) != _digest(record)
+
+        state["windows"] = merged
+        state["seen_at"] = now
+        if not state.get("first_seen_at"):
+            state["first_seen_at"] = now
+        if fresh:
+            state["rate_limits_seen"] = True
+            state["last_seen_at"] = now
+
+        # The status line fires several times a second while a turn streams and
+        # these numbers move a percent every few minutes, so write only when
+        # something moved - plus a slow heartbeat, so "as of" stays honest.
+        if changed or now - float(state.get("updated_at") or 0) >= LIMITS_HEARTBEAT:
+            state["version"] = LIMITS_VERSION
+            state["updated_at"] = now
+            save_limits(state)
+        return merged
+    except Exception as exc:
+        debug("limits failed: %s" % exc)
+        return fresh
+    finally:
+        unlock(fd)
+
+
+def save_limits(state):
+    # No fsync, unlike save_state: this file is a cache of a number the next
+    # status line run reproduces, and fsync has no business on a UI path.
+    # One fixed temp name, not a pid-suffixed one: every writer holds
+    # LIMITS_LOCK, so they cannot collide - and if the replace fails (a
+    # limits.json left as a directory by a botched restore, say) a pid-suffixed
+    # name would strand one orphan per status line redraw, thousands an hour.
+    tmp = LIMITS + ".tmp"
+    try:
+        with open(tmp, "w") as fh:
+            json.dump(state, fh, ensure_ascii=False)
+        os.replace(tmp, LIMITS)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def statusline_text(windows):
+    parts = []
+    for key, label in LIMIT_WINDOWS:
+        window = windows.get(key)
+        if window:
+            parts.append("%s %d%%" % (label, int(round(window["used_percentage"]))))
+    return " · ".join(parts)
+
+
+def statusline_main():
+    """--statusline mode. stdout IS the terminal's status line here, so this is
+    the one path that prints - and it still has to exit 0: any other exit code
+    makes Claude Code discard the output and blank the row."""
+    try:
+        raw = sys.stdin.buffer.read()
+    except Exception:
+        raw = b""
+
+    payload = {}
+    if raw.strip():
+        try:
+            payload = json.loads(raw.decode("utf-8", "replace"), strict=False)
+        except Exception as exc:
+            debug("statusline parse failed: %s" % exc)
+    if not isinstance(payload, dict):
+        payload = {}
+
+    now = time.time()
+    windows = read_windows(payload, now)
+    try:
+        os.makedirs(BASE, exist_ok=True)
+        windows = merge_limits(windows, payload.get("session_id"), now)
+    except Exception as exc:
+        debug("statusline failed: %s" % exc)
+
+    text = statusline_text(windows)
+    if text:
+        try:
+            sys.stdout.write(text + "\n")
+        except Exception:
+            pass
+
+
+# --------------------------------------------------------------------------
 
 def main():
     try:
@@ -363,20 +624,11 @@ def main():
     except Exception:
         return
 
-    deadline = time.time() + LOCK_TIMEOUT
-    lock_fd = None
+    lock_fd = lock(LOCK, LOCK_TIMEOUT)
+    if lock_fd is None:
+        debug("lock timeout for %s" % event.get("hook_event_name"))
+        return
     try:
-        lock_fd = os.open(LOCK, os.O_CREAT | os.O_RDWR, 0o644)
-        while True:
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except IOError:
-                if time.time() > deadline:
-                    debug("lock timeout for %s" % event.get("hook_event_name"))
-                    return
-                time.sleep(0.01)
-
         state = load_state()
         sid = apply_event(state, event)
         prune(state, sid)
@@ -385,18 +637,18 @@ def main():
     except Exception as exc:
         debug("failed: %s" % exc)
     finally:
-        if lock_fd is not None:
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                os.close(lock_fd)
-            except Exception:
-                pass
+        unlock(lock_fd)
 
 
 if __name__ == "__main__":
     try:
-        main()
+        if "--statusline" in sys.argv:
+            statusline_main()
+        else:
+            main()
     except Exception:
         pass
-    # Always succeed: a non-zero exit or stray stdout would disturb the session.
+    # Always succeed. A non-zero exit or stray stdout would disturb the session,
+    # and in --statusline mode it also makes Claude Code discard the output and
+    # blank the line.
     sys.exit(0)

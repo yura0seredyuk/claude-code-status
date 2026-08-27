@@ -3,16 +3,23 @@
 
 Idempotent: every entry it writes is tagged with MARKER, so re-running replaces
 its own entries and leaves hooks installed by anything else untouched.
+
+    install-hooks.py [python]              hooks + the statusLine that feeds
+                                           the plan usage rows
+    install-hooks.py [python] --no-limits  hooks only, statusLine slot given back
+    install-hooks.py --uninstall           remove both
 """
 
 import json
 import os
+import shlex
 import shutil
 import sys
 import time
 
 HOME = os.path.expanduser("~")
 SETTINGS = os.path.join(HOME, ".claude", "settings.json")
+LIMITS = os.path.join(HOME, ".claude", "claude-status", "limits.json")
 MARKER = "claude-status/hook.py"
 
 # matcher=None -> the event takes no matcher
@@ -74,6 +81,62 @@ def strip_ours(settings):
         settings.pop("hooks", None)
 
 
+# Unlike the hooks, this one must NOT be silenced: its stdout is the status
+# line. And no `|| true` - the script already exits 0 on every path, whereas a
+# genuinely broken interpreter should show up in `claude --debug` as a non-zero
+# exit rather than as a mysteriously empty row.
+def statusline_command(python, hook):
+    # shlex, not bare quotes: /bin/sh -c runs this, and a home directory
+    # containing $ or " would otherwise mangle or fail to parse the command -
+    # and a non-zero exit blanks the status line row permanently.
+    return "%s %s --statusline" % (shlex.quote(python), shlex.quote(hook))
+
+
+def apply_statusline(settings, command, mode):
+    """settings.json has exactly one statusLine slot - it is a scalar, not a
+    merged list like hooks - so claiming it means taking it away from whatever
+    the user already had. Never do that silently, and never wrap their command
+    to chain to it: that would put a Python start in front of theirs on every
+    keystroke-driven redraw, and leave a restore path that a failed uninstall
+    could strand."""
+    existing = settings.get("statusLine")
+    current = existing.get("command", "") if isinstance(existing, dict) else None
+    ours = current is not None and MARKER in current and "--statusline" in current
+
+    if mode == "off":
+        if ours:
+            settings.pop("statusLine", None)
+            # Nothing will refresh limits.json again, and a file left behind
+            # would keep the app showing rows - and switches for them - for a
+            # feature the user just turned off.
+            try:
+                os.unlink(LIMITS)
+            except OSError:
+                pass
+            return "plan limits: statusLine entry removed"
+        return None
+    if current is not None and not ours:
+        if mode == "keep":
+            return None
+        # Their script, their edit, their decision: no wrapper to uninstall, no
+        # recursion when install.sh is re-run, no collision with /statusline.
+        return ("plan limits: NOT enabled - statusLine is already taken by\n"
+                "    %s\n"
+                "  Claude Status will not overwrite it. To feed it too, read stdin\n"
+                "  once at the top of your own script and fan it out:\n"
+                "    input=$(cat)\n"
+                "    printf '%%s' \"$input\" | %s >/dev/null 2>&1\n"
+                "    printf '%%s' \"$input\" | <the rest of your status line>"
+                % (current, command))
+    if mode == "keep":
+        if not ours:
+            return None
+        settings["statusLine"] = {"type": "command", "command": command}
+        return "plan limits: still on"
+    settings["statusLine"] = {"type": "command", "command": command}
+    return "plan limits: statusLine -> %s" % command
+
+
 def add_ours(settings, command):
     hooks = settings.setdefault("hooks", {})
     for event, matcher in EVENTS:
@@ -86,6 +149,13 @@ def add_ours(settings, command):
 
 def main():
     uninstall = "--uninstall" in sys.argv
+    # On unless asked otherwise. An already-occupied statusLine is still never
+    # overwritten - that is about not destroying someone else's config, not
+    # about which features are on.
+    limits = "off" if uninstall else "on"
+    if "--no-limits" in sys.argv:
+        limits = "off"
+
     settings = load()
 
     if os.path.exists(SETTINGS):
@@ -93,21 +163,31 @@ def main():
         shutil.copy2(SETTINGS, backup)
         print("  backup: %s" % backup)
 
+    python = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else sys.executable
+    hook = os.path.join(HOME, ".claude", "claude-status", "hook.py")
+
     strip_ours(settings)
     if not uninstall:
-        python = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("--") else sys.executable
-        hook = os.path.join(HOME, ".claude", "claude-status", "hook.py")
         # Silenced and forced to succeed: a status indicator must never be able
         # to disturb a Claude Code session.
-        add_ours(settings, '%s "%s" >/dev/null 2>&1 || true' % (python, hook))
+        add_ours(settings, "%s %s >/dev/null 2>&1 || true"
+                 % (shlex.quote(python), shlex.quote(hook)))
+    note = apply_statusline(settings, statusline_command(python, hook), limits)
 
-    os.makedirs(os.path.dirname(SETTINGS), exist_ok=True)
-    tmp = SETTINGS + ".tmp"
+    # Resolved first: os.replace renames the symlink itself, so writing through
+    # SETTINGS directly would turn a settings.json symlinked into a dotfiles
+    # repo into a plain file and quietly orphan the repo copy. Claude Code
+    # supports that setup deliberately, so preserve it.
+    target = os.path.realpath(SETTINGS)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    tmp = target + ".tmp"
     with open(tmp, "w") as fh:
         json.dump(settings, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
-    os.replace(tmp, SETTINGS)
+    os.replace(tmp, target)
     print("  %s: %s" % ("hooks removed from" if uninstall else "hooks written to", SETTINGS))
+    if note:
+        print("  %s" % note)
 
 
 if __name__ == "__main__":

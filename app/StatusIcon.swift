@@ -87,6 +87,282 @@ struct StateFile: Decodable {
 }
 
 // ---------------------------------------------------------------------------
+// Plan usage limits
+//
+// Claude Code publishes the account's rate-limit windows in exactly one local
+// place: the JSON it hands to the `statusLine` command. No hook event carries
+// them. `hook.py --statusline` folds that into limits.json; this reads it.
+//
+// Two windows and no more - seven_day_opus, model_scoped and the rest live only
+// in the SDK's get_usage response, which is a different, undocumented shape.
+// ---------------------------------------------------------------------------
+
+struct LimitWindow: Decodable {
+    let usedPercentage: Double?
+    let resetsAt: Double?
+    /// When a Claude Code session last reported this number, which is not the
+    /// same as when it was true: see `limitStaleAfter`.
+    let capturedAt: Double?
+
+    var percent: Double { max(0, min(100, usedPercentage ?? 0)) }
+    func isLive(_ now: Double) -> Bool { (resetsAt ?? 0) > now && usedPercentage != nil }
+}
+
+struct LimitWindows: Decodable {
+    let fiveHour: LimitWindow?
+    let sevenDay: LimitWindow?
+}
+
+struct LimitsFile: Decodable {
+    let updatedAt: Double?
+    let seenAt: Double?        // last status line run, whatever it carried
+    let rateLimitsSeen: Bool?  // has a payload ever carried rate_limits
+    let windows: LimitWindows?
+}
+
+enum LimitKind: CaseIterable {
+    case session, week
+
+    var key: String {
+        switch self {
+        case .session: return "five_hour"
+        case .week: return "seven_day"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .session: return "Session limit (5h)"
+        case .week: return "Weekly limit (7d)"
+        }
+    }
+
+    func window(_ file: LimitsFile) -> LimitWindow? {
+        switch self {
+        case .session: return file.windows?.fiveHour
+        case .week: return file.windows?.sevenDay
+        }
+    }
+}
+
+/// After this long without a fresh reading the number gets an "as of" marker.
+/// It has to: the status line only runs while an interactive terminal is on
+/// screen, so a value can be hours old - and a `claude -p` job can burn through
+/// the same quota all afternoon without ever moving it.
+let limitStaleAfter: Double = 10 * 60
+
+/// The writer touches limits.json at least once a minute while a status line is
+/// running, so nothing for this long means nothing is running it.
+let limitStalledAfter: Double = 30 * 60
+
+func resetsInText(_ seconds: Double) -> String {
+    // Everything is derived from minutes-rounded-up, so the units stay
+    // consistent across the boundaries: 59m 30s reads "1h", not "60m" (a unit
+    // nothing else here produces) and not "0h 59m".
+    let minutes = max(1, (max(0, Int(seconds.rounded())) + 59) / 60)
+    if minutes < 60 { return "\(minutes)m" }
+    if minutes < 24 * 60 {
+        let h = minutes / 60, m = minutes % 60
+        return m == 0 ? "\(h)h" : "\(h)h \(m)m"
+    }
+    let d = minutes / (24 * 60), h = (minutes % (24 * 60)) / 60
+    return h == 0 ? "\(d)d" : "\(d)d \(h)h"
+}
+
+/// One rendered row, whichever source it came from.
+struct LimitRow {
+    let label: String
+    let percent: Double
+    let resetsAt: Double
+    let capturedAt: Double
+    /// Second-hand rows state their age even when recent, because "recent" for
+    /// them means the last time you happened to open /usage.
+    let alwaysShowAge: Bool
+
+    var percentText: String { "\(Int(percent.rounded()))%" }
+
+    func detail(now: Double) -> String {
+        var parts: [String] = []
+        if resetsAt > now { parts.append("resets in " + resetsInText(resetsAt - now)) }
+        if capturedAt > 0, alwaysShowAge || now - capturedAt > limitStaleAfter {
+            parts.append("as of " + shortDuration(now - capturedAt) + " ago")
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
+func limitRow(_ kind: LimitKind, _ window: LimitWindow) -> LimitRow {
+    return LimitRow(label: kind.label, percent: window.percent,
+                    resetsAt: window.resetsAt ?? 0, capturedAt: window.capturedAt ?? 0,
+                    alwaysShowAge: false)
+}
+
+// ---------------------------------------------------------------------------
+// Per-model weekly windows
+//
+// The status line payload carries only the two account-wide windows. Per-model
+// ones - Fable, Opus, Sonnet - exist solely in the /api/oauth/usage response,
+// which Claude Code caches into ~/.claude.json as `cachedUsageUtilization`
+// every time you open /usage. Reading that file costs nothing and needs no
+// credentials; calling the endpoint ourselves would need the full login token
+// and could rotate Claude Code out of its own session.
+//
+// The catch is the refresh: only /usage writes it. These rows are second-hand
+// by nature, so they always carry their age and disappear once it is absurd.
+// ---------------------------------------------------------------------------
+
+/// Past this, a cached percentage says more about when you last opened /usage
+/// than about your account.
+let modelLimitMaxAge: Double = 24 * 3600
+
+/// The cache stores ISO 8601 with microseconds. ISO8601DateFormatter rejects
+/// that either way round - its fractional-seconds option insists the fraction
+/// be there, the plain option insists it not be - so drop the fraction and one
+/// setting parses every shape the server sends.
+func parseTimestamp(_ text: String) -> Double? {
+    let trimmed = text.replacingOccurrences(of: "\\.\\d+", with: "",
+                                            options: .regularExpression)
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter.date(from: trimmed)?.timeIntervalSince1970
+}
+
+/// resets_at is an ISO string here, unlike the status line's epoch seconds -
+/// and Claude Code's own projection defensively accepts a number too.
+struct FlexibleDate: Decodable {
+    let time: Double?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() { time = nil }
+        else if let seconds = try? container.decode(Double.self) { time = seconds }
+        else if let text = try? container.decode(String.self) { time = parseTimestamp(text) }
+        else { time = nil }
+    }
+}
+
+struct CachedWindow: Decodable {
+    let utilization: Double?
+    let resetsAt: FlexibleDate?
+}
+
+struct CachedModelLimit: Decodable {
+    let kind: String?
+    let percent: Double?
+    let resetsAt: FlexibleDate?
+    let scope: Scope?
+
+    struct Scope: Decodable {
+        let model: Model?
+        struct Model: Decodable { let displayName: String? }
+    }
+}
+
+struct CachedUtilization: Decodable {
+    let sevenDayOpus: CachedWindow?
+    let sevenDaySonnet: CachedWindow?
+    let limits: [CachedModelLimit]?
+}
+
+struct UsageCache: Decodable {
+    let fetchedAtMs: Double?
+    let utilization: CachedUtilization?
+}
+
+/// ~/.claude.json, of which exactly one key is any of our business.
+struct ClaudeConfigFile: Decodable {
+    let cachedUsageUtilization: UsageCache?
+}
+
+func modelLimitRows(_ cache: UsageCache, now: Double) -> [LimitRow] {
+    let captured = (cache.fetchedAtMs ?? 0) / 1000
+    guard captured > 0, now - captured < modelLimitMaxAge,
+          let usage = cache.utilization else { return [] }
+
+    var rows: [String: LimitRow] = [:]
+    func add(_ name: String?, _ percent: Double?, _ resets: Double?) {
+        guard let name = name, !name.isEmpty, let percent = percent,
+              let resets = resets, resets > now else { return }
+        // No reset time means the window never opened - that model has not been
+        // used this week - and an eternal 0% bar is worse than no row at all.
+        rows[name.lowercased()] = LimitRow(label: name + " (7d)", percent: percent,
+                                           resetsAt: resets, capturedAt: captured,
+                                           alwaysShowAge: true)
+    }
+    // Server-named rows win; the fixed keys only fill gaps they leave.
+    for row in usage.limits ?? [] where row.kind == "weekly_scoped" {
+        add(row.scope?.model?.displayName, row.percent, row.resetsAt?.time)
+    }
+    for (name, window) in [("Opus", usage.sevenDayOpus), ("Sonnet", usage.sevenDaySonnet)] {
+        if rows[name.lowercased()] == nil {
+            add(name, window?.utilization, window?.resetsAt?.time)
+        }
+    }
+    return rows.values.sorted { $0.label < $1.label }
+}
+
+/// Why there is nothing to show, short enough for a menu row plus the long
+/// version for its tooltip. Deliberately does not try to diagnose the account
+/// type: nothing in the payload identifies it, and guessing from elapsed time
+/// told ordinary subscribers they were on Bedrock for the crime of leaving a
+/// terminal open before their first message.
+func limitPlaceholder(_ file: LimitsFile, now: Double, sessionsLive: Bool)
+        -> (text: String, detail: String) {
+    if now - (file.seenAt ?? 0) > limitStalledAfter {
+        return sessionsLive
+            ? ("not updating", "Nothing has run the status line for a while. Check the "
+                             + "statusLine entry in ~/.claude/settings.json - Claude Code's own "
+                             + "/statusline command replaces it.")
+            : ("no Claude Code session running", "These only refresh while an interactive "
+                             + "Claude Code terminal is open.")
+    }
+    if file.rateLimitsSeen == true {
+        return ("window reset", "Waiting for the next request to report the new window.")
+    }
+    return ("no reading yet", "Claude Code publishes these only after an API response — and "
+                            + "never for API-key, Bedrock or Vertex sessions, whose responses "
+                            + "do not carry the rate-limit headers.")
+}
+
+func limitBarColor(_ percent: Double) -> NSColor {
+    if percent >= 95 { return .systemRed }
+    if percent >= 80 { return .systemOrange }
+    return .controlAccentColor
+}
+
+let limitBarSize = NSSize(width: 58, height: 6)
+
+/// Drawn, not typed. The menu font has no block-drawing glyphs, so a "████░░░░"
+/// bar falls back to three different typefaces at three different widths and
+/// shoves everything after it sideways every time the value changes.
+func limitBarImage(percent: Double, size: NSSize = limitBarSize) -> NSImage {
+    let fraction = max(0, min(1, percent / 100))
+    let color = limitBarColor(percent)
+    let image = NSImage(size: size, flipped: false) { rect in
+        let radius = rect.height / 2
+        // Resolved inside the handler on purpose: AppKit re-runs it once per
+        // appearance and caches the result, so light and dark adapt for free.
+        // A colour resolved outside is frozen at whichever appearance happened
+        // to be current when the image was built.
+        NSColor.quaternaryLabelColor.setFill()
+        NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+        if fraction > 0 {
+            color.setFill()
+            // A rounded cap degenerates below its own diameter, so clamp: 1%
+            // should read as a dot, not a sliver.
+            let width = max(rect.height, rect.width * CGFloat(fraction))
+            NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: width, height: rect.height),
+                         xRadius: radius, yRadius: radius).fill()
+        }
+        return true
+    }
+    // A template image is flattened to an alpha mask and tinted with the menu's
+    // text colour, which would paint the bar black.
+    image.isTemplate = false
+    return image
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
