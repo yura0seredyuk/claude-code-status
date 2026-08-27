@@ -340,6 +340,25 @@ SIGN_IDENTITY="Developer ID Application: NAME (TEAMID)" VERSION=1.1 ./app/build.
 
 `CFBundleVersion` comes from `git rev-list --count HEAD`, so it moves on its own.
 
+## Tests
+
+```bash
+tests/run.sh
+```
+
+Builds the hook and the app's drawing code, feeds the event fixtures in
+`tests/events/` through a throwaway HOME, and diffs the resulting state against
+`tests/golden/state.json`. Then the status line merge rules, write
+amplification, 30 parallel hooks, a limits.json that cannot be written, and the
+app-side formatting and decoding. Nothing touches `~/.claude`.
+
+`tests/run.sh --update` regenerates the golden file after a deliberate change;
+read the diff before committing it.
+
+The suite is mutation-checked: breaking the monotonic merge, letting absence
+erase a stored window, reintroducing the "60m" formatting bug, dropping the
+error-on-stop branch or disabling the lenient JSON parsing each make it fail.
+
 Iterating without a full reinstall:
 
 ```bash
