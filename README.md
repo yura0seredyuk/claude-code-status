@@ -6,6 +6,8 @@ A macOS menu bar icon that shows what Claude Code is doing in your terminal.
 > endorsed by, or supported by Anthropic. Claude and Claude Code are trademarks
 > of Anthropic.
 
+<img src="docs/01-waiting-menu.png" width="440" alt="The Statuslamp menu: two Claude Code sessions, one waiting for permission and one working, above the 5-hour and weekly usage bars">
+
 ```
 ◜◝  Working          blue ring, spinning
 ⏸   Waiting for you  orange — needs a permission or an answer
@@ -49,6 +51,8 @@ The menu carries two rows for the account's usage windows:
 ▬▬▬▬▬▬░░  Session limit (5h)   87%  ·  resets in 1h 15m
 ▬░░░░░░░  Weekly limit (7d)     9%  ·  resets in 3d 9h
 ```
+
+<img src="docs/02-limits-menu.png" width="440" alt="The menu with the session limit at 91 percent, its bar orange">
 
 The bar goes orange past 80% and red past 95%, and crossing either threshold
 alerts once per window — "Session limit (5h) — 87% used". **Limit alerts** and
@@ -237,6 +241,8 @@ Event → state mapping:
 Plan usage limits arrive by a different route - the `statusLine` command, which
 the same script serves with `--statusline`, writing `limits.json` beside
 `state.json`.
+
+<img src="docs/03-errors-menu.png" width="440" alt="The menu with one session showing a rate limit error and another finished">
 
 The icon turns red in two cases: the turn died on an API failure (`StopFailure`,
 which shows the reason in words, e.g. "Rate limit"), or the turn ended while the

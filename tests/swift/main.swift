@@ -115,6 +115,31 @@ check("cache older than a day", rows(#"""
 check("no cache key", rows(#"{"other":1}"#), "NO CACHE")
 
 // ---------------------------------------------------------------------------
+print("  menuBarLimit")
+func barDigit(_ json: String) -> String {
+    guard let file = try? decoder.decode(LimitsFile.self, from: json.data(using: .utf8)!)
+    else { return "DECODE FAILED" }
+    guard let w = menuBarLimit(file, now: clock) else { return "(none)" }
+    return "\(Int(w.percent.rounded()))%"
+}
+let live = clock + 3600
+// Always the 5-hour window, even when the weekly one is higher: a digit that
+// switched between them would mean two different things on two days.
+check("weekly higher, session still wins", barDigit(#"""
+{"windows":{"five_hour":{"used_percentage":12,"resets_at":\#(live),"captured_at":\#(clock)},
+            "seven_day":{"used_percentage":88,"resets_at":\#(live),"captured_at":\#(clock)}}}
+"""#), "12%")
+check("no session window", barDigit(#"""
+{"windows":{"seven_day":{"used_percentage":88,"resets_at":\#(live),"captured_at":\#(clock)}}}
+"""#), "(none)")
+check("stale reading is dropped", barDigit(#"""
+{"windows":{"five_hour":{"used_percentage":12,"resets_at":\#(live),"captured_at":\#(clock - 4000)}}}
+"""#), "(none)")
+check("expired window", barDigit(#"""
+{"windows":{"five_hour":{"used_percentage":12,"resets_at":\#(clock - 10),"captured_at":\#(clock)}}}
+"""#), "(none)")
+
+// ---------------------------------------------------------------------------
 print("  unhandledEvents")
 func unhandled(_ json: String) -> String {
     guard let file = try? decoder.decode(StateFile.self, from: json.data(using: .utf8)!)

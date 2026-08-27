@@ -347,6 +347,19 @@ func limitPlaceholder(_ file: LimitsFile, now: Double, sessionsLive: Bool)
                             + "do not carry the rate-limit headers.")
 }
 
+/// The window the menu bar digit reports, and always the same one. The 5-hour
+/// session limit is what actually stops you mid-task; a digit that silently
+/// switched to the weekly window when that one happened to be higher would mean
+/// two different things on two different days, which is worse than no digit.
+///
+/// A stale reading is dropped rather than shown: the menu rows have room to
+/// admit "as of 3h ago", two characters in the menu bar do not.
+func menuBarLimit(_ file: LimitsFile, now: Double) -> LimitWindow? {
+    guard let window = LimitKind.session.window(file), window.isLive(now),
+          now - (window.capturedAt ?? 0) <= limitStaleAfter else { return nil }
+    return window
+}
+
 func limitBarColor(_ percent: Double) -> NSColor {
     if percent >= 95 { return .systemRed }
     if percent >= 80 { return .systemOrange }

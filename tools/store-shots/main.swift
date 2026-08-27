@@ -130,8 +130,8 @@ let shots: [Shot] = [
          sub: "One glance at the menu bar instead of cycling through terminals.",
          aggregate: .waiting,
          sessions: [
-            ("mebelmarket", .waiting, "Permission needed: Bash · rm -rf node_modules"),
-            ("berig", .working, "Bash: npm test · 12s · 4 tool calls"),
+            ("api-gateway", .waiting, "Permission needed: Bash · rm -rf node_modules"),
+            ("acme-web", .working, "Bash: npm test · 12s · 4 tool calls"),
          ],
          limits: [limitRow(.session, window(76, 8040)),
                   limitRow(.week, window(28, 172800))]),
@@ -139,7 +139,7 @@ let shots: [Shot] = [
          caption: "See your plan limits before you hit them",
          sub: "The 5-hour and weekly windows, with the time each one resets.",
          aggregate: .working,
-         sessions: [("statuslamp", .working, "Edit: main.swift · 1m 4s · 22 tool calls")],
+         sessions: [("design-system", .working, "Edit: Button.swift · 1m 4s · 22 tool calls")],
          limits: [limitRow(.session, window(91, 2400)),
                   limitRow(.week, window(64, 340000))]),
     Shot(file: "03-errors",
@@ -147,8 +147,8 @@ let shots: [Shot] = [
          sub: "Rate limits, API failures and tool errors all reach the icon.",
          aggregate: .error,
          sessions: [
-            ("myntkaup-app", .error, "Rate limit · resets in 41m"),
-            ("stubbs", .done, "“All tests pass” · 3m ago"),
+            ("checkout", .error, "Rate limit · resets in 41m"),
+            ("docs-site", .done, "“All tests pass” · 3m ago"),
          ],
          limits: [limitRow(.session, window(100, 2460)),
                   limitRow(.week, window(71, 300000))]),
@@ -203,8 +203,9 @@ func compose(_ shot: Shot, menu menuRep: NSBitmapImageRep?) -> Data? {
     NSRect(x: 0, y: canvas.height - barHeight, width: canvas.width, height: barHeight).fill()
 
     let iconSide: CGFloat = 18 * scale
+    let iconX = canvas.width * 0.62
     let icon = statusImage(status: shot.aggregate, badge: false, phase: 0.2)
-    icon.draw(in: NSRect(x: canvas.width / 2 - iconSide / 2,
+    icon.draw(in: NSRect(x: iconX,
                          y: canvas.height - barHeight + (barHeight - iconSide) / 2,
                          width: iconSide, height: iconSide))
 
@@ -214,21 +215,7 @@ func compose(_ shot: Shot, menu menuRep: NSBitmapImageRep?) -> Data? {
     clock.draw(at: NSPoint(x: canvas.width - clock.size().width - 24 * scale,
                            y: canvas.height - barHeight + (barHeight - clock.size().height) / 2))
 
-    let centred = NSMutableParagraphStyle()
-    centred.alignment = .center
-    let inset: CGFloat = 200
-    NSAttributedString(string: shot.caption, attributes: [
-        .font: NSFont.systemFont(ofSize: 64, weight: .semibold),
-        .foregroundColor: NSColor.white,
-        .paragraphStyle: centred,
-    ]).draw(in: NSRect(x: inset, y: canvas.height - 340,
-                       width: canvas.width - inset * 2, height: 100))
-    NSAttributedString(string: shot.sub, attributes: [
-        .font: NSFont.systemFont(ofSize: 32, weight: .regular),
-        .foregroundColor: NSColor(white: 1, alpha: 0.62),
-        .paragraphStyle: centred,
-    ]).draw(in: NSRect(x: inset, y: canvas.height - 420,
-                       width: canvas.width - inset * 2, height: 60))
+
 
     // The representation is drawn directly rather than wrapped in an NSImage:
     // bitmapImageRepForCachingDisplay reports its size in points while holding
@@ -239,16 +226,42 @@ func compose(_ shot: Shot, menu menuRep: NSBitmapImageRep?) -> Data? {
     // display is 710 pixels, which is exactly how large the menu appears in a
     // real 2880x1800 screenshot. Enlarging it would be a nicer picture and a
     // false one.
+    //
+    // It hangs from the icon, immediately under the menu bar, because that is
+    // where a status menu appears. A window floating mid-screen would be a
+    // picture of something this app has never done.
+    var menuBottom = canvas.height
     if let menuRep = menuRep {
         let size = NSSize(width: menuRep.pixelsWide, height: menuRep.pixelsHigh)
-        let rect = NSRect(x: (canvas.width - size.width) / 2,
-                          y: canvas.height - 700 - size.height,
+        let left = min(iconX - 10 * scale, canvas.width - size.width - 40 * scale)
+        let rect = NSRect(x: left, y: canvas.height - barHeight - size.height,
                           width: size.width, height: size.height)
         NSColor(white: 0, alpha: 0.5).setFill()
         NSBezierPath(roundedRect: rect.insetBy(dx: -20, dy: -20),
                      xRadius: 28, yRadius: 28).fill()
         menuRep.draw(in: rect)
+        menuBottom = rect.minY
     }
+
+    // Caption under the menu rather than over it: the picture reads top to
+    // bottom, interface first and the claim about it second.
+    let centred = NSMutableParagraphStyle()
+    centred.alignment = .center
+    let inset: CGFloat = 220
+    // Centred in what is left below the menu, not hung off it.
+    let captionTop = menuBottom * 0.58
+    NSAttributedString(string: shot.caption, attributes: [
+        .font: NSFont.systemFont(ofSize: 64, weight: .semibold),
+        .foregroundColor: NSColor.white,
+        .paragraphStyle: centred,
+    ]).draw(in: NSRect(x: inset, y: captionTop - 90,
+                       width: canvas.width - inset * 2, height: 100))
+    NSAttributedString(string: shot.sub, attributes: [
+        .font: NSFont.systemFont(ofSize: 32, weight: .regular),
+        .foregroundColor: NSColor(white: 1, alpha: 0.62),
+        .paragraphStyle: centred,
+    ]).draw(in: NSRect(x: inset, y: captionTop - 165,
+                       width: canvas.width - inset * 2, height: 60))
 
     NSGraphicsContext.restoreGraphicsState()
     return flatten(rep)?.representation(using: .png, properties: [:])
@@ -287,6 +300,12 @@ let timer = Timer(timeInterval: 0.7, repeats: false) { _ in
               let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { continue }
         view.cacheDisplay(in: view.bounds, to: rep)
         captured = rep
+    }
+    // The menu on its own, for a README where a 2880x1800 banner is useless.
+    if let dir = ProcessInfo.processInfo.environment["STATUSLAMP_MENU_DIR"],
+       let rep = captured, let png = rep.representation(using: .png, properties: [:]) {
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try? png.write(to: URL(fileURLWithPath: "\(dir)/\(shot.file)-menu.png"))
     }
     if let data = compose(shot, menu: captured) {
         try? data.write(to: URL(fileURLWithPath: "\(outDir)/\(shot.file).png"))

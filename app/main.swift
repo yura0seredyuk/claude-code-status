@@ -187,19 +187,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
         return try? decoder.decode(LimitsFile.self, from: data)
     }
 
-    /// The window closest to biting, which is the one worth a menu bar digit.
-    /// Stale readings are dropped rather than shown: the menu rows have room to
-    /// admit "as of 3h ago", two characters in the menu bar do not.
-    private var peakLimit: (kind: LimitKind, window: LimitWindow)? {
+    private var barLimit: LimitWindow? {
         guard let file = limits else { return nil }
-        let now = Date().timeIntervalSince1970
-        return LimitKind.allCases
-            .compactMap { kind -> (kind: LimitKind, window: LimitWindow)? in
-                guard let window = kind.window(file), window.isLive(now),
-                      now - (window.capturedAt ?? 0) <= limitStaleAfter else { return nil }
-                return (kind, window)
-            }
-            .max { $0.window.percent < $1.window.percent }
+        return menuBarLimit(file, now: Date().timeIntervalSince1970)
     }
 
     private var visibleSessions: [SessionRecord] {
@@ -331,14 +321,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
         guard let button = statusItem.button else { return }
 
         let active = visibleSessions.filter { effectiveStatus($0) != .idle }.count
-        let peak = showLimitInMenuBar ? peakLimit : nil
-        let percent = peak.map { Int($0.window.percent.rounded()) }
+        let percent = showLimitInMenuBar ? barLimit.map { Int($0.percent.rounded()) } : nil
         // Redrawing the icon costs real CPU, and reload() runs twice a second
         // forever. Only redraw when something visible actually changed - while
         // spinning, that means once per animation step.
         let step = aggregate == .working ? Int(phase * 20) : 0
-        let key = "\(aggregate.rawValue)|\(badge)|\(active)|\(step)"
-            + "|\(peak?.kind.key ?? "-")|\(percent ?? -1)"
+        let key = "\(aggregate.rawValue)|\(badge)|\(active)|\(step)|\(percent ?? -1)"
         guard key != lastRenderKey else { return }
         lastRenderKey = key
 
@@ -359,8 +347,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
             ])
 
         var tip = "Claude Code — \(aggregate.label)"
-        if let peak = peak {
-            tip += "\n\(peak.kind.label): \(Int(peak.window.percent.rounded()))% used"
+        if let percent = percent {
+            tip += "\n\(LimitKind.session.label): \(percent)% used"
         }
         button.toolTip = tip
     }
