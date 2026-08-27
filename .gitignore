@@ -29,3 +29,6 @@ __pycache__/
 
 # release artefacts
 dist/
+
+# store screenshots are build output; tools/store-shots remakes them
+store/screenshots/

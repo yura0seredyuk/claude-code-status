@@ -380,6 +380,7 @@ hook/install-hooks.py       edits ~/.claude/settings.json (hooks + statusLine)
 tools/make-icon/            draws the app icon and writes the .iconset
 tools/render-icons/         dumps every menu bar icon state to a PNG sheet
 tools/menu-text/            prints the menu as text
+tools/store-shots/          App Store screenshots at 2880x1800, no alpha
 tools/demo-state.py         injects fake sessions for eyeballing
 ```
 
@@ -432,6 +433,19 @@ below 32pt the strokes and gaps widen so the segments do not smear together.
 
 Hook diagnostics: `CLAUDE_STATUS_DEBUG=1` writes a log to
 `~/.claude/statuslamp/hook.log`.
+
+## App Store
+
+Not submitted, and [store/listing.md](store/listing.md) says why: three things
+still stand, two of them structural. It also holds the metadata &mdash; the 160
+characters Apple actually indexes &mdash; and the steps for when it is time.
+
+Screenshots at the size Connect accepts:
+
+```bash
+swiftc -swift-version 5 app/StatusIcon.swift tools/store-shots/main.swift -o /tmp/shots
+/tmp/shots store/screenshots
+```
 
 ## Licence
 
