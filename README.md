@@ -153,11 +153,13 @@ Re-running is safe — it never duplicates entries.
 **Hooks are read when a session starts**, so restart any Claude Code terminals
 that are already open before they start reporting.
 
-"Open at login" is a checkbox in the icon's menu. It only creates (or removes)
-`~/Library/LaunchAgents/com.claudestatus.agent.plist` — launchd picks it up at
-your next login. Deliberately no `launchctl bootstrap`: that would start a
-second copy of the app right now, and the matching `bootout` on disable would
-kill the very instance whose menu you are clicking in.
+"Open at login" is a checkbox in the icon's menu, backed by `SMAppService`
+(macOS 13+). Earlier versions wrote `~/Library/LaunchAgents/…plist` by hand;
+that plist is migrated and deleted on first launch, because with both in place
+macOS starts the app twice. The switch can also read "approve in System
+Settings" — a login item the user has turned off there is a state a plist on
+disk cannot represent, so the old code showed a tick for something that was
+never going to fire.
 
 ## Uninstall
 
@@ -172,9 +174,14 @@ the `statusLine` too unless it is ours), removes the launch agent, the app and
 ## How it works
 
 Claude Code can run external commands on session events. The hook
-`hook/claude-status-hook.py` receives each event as JSON on stdin, folds it into
-a single state file at `~/.claude/claude-status/state.json`, and the app re-reads
-that file twice a second and draws the icon.
+(`hook/main.swift`, compiled into the app bundle and copied to
+`~/.claude/claude-status/hook` at install time) receives each event as JSON on
+stdin, folds it into a single state file at
+`~/.claude/claude-status/state.json`, and the app re-reads that file twice a
+second and draws the icon.
+
+It is copied out of the bundle rather than run from inside it so that the
+registered hook keeps working while the app is quit, moved or updated.
 
 Event → state mapping:
 
@@ -267,8 +274,13 @@ And about the status line, which is where the plan limits live:
 - The command in `settings.json` ends with `>/dev/null 2>&1 || true`, so even a
   broken hook cannot fail a tool call.
 - Concurrent writes are serialised with `flock` and the file is replaced
-  atomically. Measured: 20 parallel hooks, 20 records, nothing lost.
-- Overhead is roughly 28 ms per tool call.
+  atomically. Measured: 30 parallel hooks, 30 records, nothing lost.
+- Overhead is roughly 8 ms per tool call. It was 29 ms while the hook was a
+  Python script — nearly all of it interpreter start, which is why it is compiled
+  now.
+- `JSONSerialization` rejects the raw newlines Claude Code puts inside string
+  values, and unlike Python's `json` it has no `strict=False`. The hook escapes
+  control characters inside string literals itself before parsing.
 
 ### Known limitation
 
@@ -310,13 +322,23 @@ app/StatusIcon.swift        states, icon drawing, menu text
 app/main.swift              menu, state reading, open at login
 app/build.sh                builds Claude Status.app (no Xcode project)
 app/AppIcon.icns            generated app icon, regenerated when stale
-hook/claude-status-hook.py  events → state.json, --statusline → limits.json
+hook/main.swift             events → state.json, --statusline → limits.json
 hook/install-hooks.py       edits ~/.claude/settings.json (hooks + statusLine)
 tools/make-icon/            draws the app icon and writes the .iconset
 tools/render-icons/         dumps every menu bar icon state to a PNG sheet
 tools/menu-text/            prints the menu as text
 tools/demo-state.py         injects fake sessions for eyeballing
 ```
+
+`build.sh` produces a universal (arm64 + x86_64) bundle with the hardened
+runtime on and an ad-hoc signature. For a release, point it at a real identity —
+nothing else changes, and the result is notarizable as-is:
+
+```bash
+SIGN_IDENTITY="Developer ID Application: NAME (TEAMID)" VERSION=1.1 ./app/build.sh
+```
+
+`CFBundleVersion` comes from `git rev-list --count HEAD`, so it moves on its own.
 
 Iterating without a full reinstall:
 
@@ -341,5 +363,9 @@ Hook diagnostics: `CLAUDE_STATUS_DEBUG=1` writes a log to
 
 ## Requirements
 
-macOS 13+, Xcode Command Line Tools (for `swiftc`), `/usr/bin/python3`.
-The app is ad-hoc signed and runs locally; notarisation is not needed.
+macOS 13+ to run. Building from this repo additionally needs the Xcode Command
+Line Tools (for `swiftc`) and `/usr/bin/python3` (the installer script only —
+nothing Python remains on the runtime path).
+
+The build is a universal binary with the hardened runtime on, ad-hoc signed;
+set `SIGN_IDENTITY` to a Developer ID and it comes out notarizable unchanged.

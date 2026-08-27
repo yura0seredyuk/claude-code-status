@@ -61,9 +61,12 @@ cp -R "$HERE/app/build/$APP_NAME" "$APP_DEST/$APP_NAME"
 
 echo "3/4 Installing the hook…"
 mkdir -p "$STATUS_DIR"
-cp "$HERE/hook/claude-status-hook.py" "$STATUS_DIR/hook.py"
-chmod +x "$STATUS_DIR/hook.py"
-HOOK_OUT="$("$PYTHON" "$HERE/hook/install-hooks.py" "$PYTHON" ${LIMITS_FLAG:+"$LIMITS_FLAG"})"
+cp "$APP_DEST/$APP_NAME/Contents/Helpers/claude-status-hook" "$STATUS_DIR/hook"
+chmod +x "$STATUS_DIR/hook"
+# Installs from before the hook was compiled left a Python script here. Nothing
+# points at it any more, and leaving it invites confusion about which one runs.
+rm -f "$STATUS_DIR/hook.py"
+HOOK_OUT="$("$PYTHON" "$HERE/hook/install-hooks.py" ${LIMITS_FLAG:+"$LIMITS_FLAG"})"
 printf '%s\n' "$HOOK_OUT"
 
 # The closing banner must not advertise --limits to somebody who just ran it,
@@ -87,7 +90,7 @@ cat <<EOF
 Done.
 
   App:    $APP_DEST/$APP_NAME
-  Hook:   $STATUS_DIR/hook.py
+  Hook:   $STATUS_DIR/hook
   State:  $STATUS_DIR/state.json
   Limits: $STATUS_DIR/limits.json
 
