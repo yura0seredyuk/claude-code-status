@@ -625,14 +625,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
     }
 }
 
-// uninstall.sh runs this before deleting the bundle. An SMAppService
-// registration outlives the app it points at, and would otherwise sit in System
-// Settings as an orphan the user has to clear by hand.
+// uninstall.sh runs --unregister-login-item before deleting the bundle: an
+// SMAppService registration outlives the app it points at, and would otherwise
+// sit in System Settings as an orphan the user has to clear by hand. The
+// opposite direction exists so that a script which took the setting away can
+// put it back - a reinstall should not quietly cost the user a preference.
 if CommandLine.arguments.contains("--unregister-login-item") {
     try? SMAppService.mainApp.unregister()
     try? FileManager.default.removeItem(
         at: URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/LaunchAgents/\(launchAgentLabel).plist"))
+    exit(0)
+}
+if CommandLine.arguments.contains("--register-login-item") {
+    do { try SMAppService.mainApp.register() } catch { exit(1) }
     exit(0)
 }
 
