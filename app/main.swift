@@ -39,6 +39,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
     private var lastSignature: String = ""
     private var lastRenderKey: String = ""
 
+    /// macOS decides whether a banner ever appears, not the switch in the menu,
+    /// and it decides it per bundle identifier - which the rename reset. Held so
+    /// the menu can say the system is refusing them, rather than showing a tick
+    /// beside something that will never fire.
+    private var notificationAuth: UNAuthorizationStatus = .notDetermined
+
     /// nil means the feature was never switched on, and the menu says nothing
     /// about it at all. Once limits.json exists it always has something to say.
     /// Event names Claude Code sent that this build has no handling for. Empty
@@ -100,7 +106,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
 
         let center = UNUserNotificationCenter.current()
         center.delegate = self
-        center.requestAuthorization(options: [.alert]) { _, _ in }
+        center.requestAuthorization(options: [.alert]) { [weak self] _, _ in
+            self?.refreshNotificationAuth()
+        }
 
         migratePreferences()
         migrateLegacyLoginItem()
@@ -178,6 +186,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
         limitsSignature = sig
         limits = readLimits()
         checkLimitAlerts()
+    }
+
+    private func refreshNotificationAuth() {
+        UNUserNotificationCenter.current().getNotificationSettings { [weak self] settings in
+            let status = settings.authorizationStatus
+            DispatchQueue.main.async { self?.notificationAuth = status }
+        }
     }
 
     private func readLimits() -> LimitsFile? {
@@ -356,6 +371,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
     // MARK: menu
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        // Asked again on every open: the answer changes in System Settings,
+        // where the app is not told about it.
+        refreshNotificationAuth()
         reload(force: true)
         menu.removeAllItems()
 
@@ -383,7 +401,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
 
         menu.addItem(.separator())
         menu.addItem(toggle("Sound alerts", on: soundEnabled, action: #selector(toggleSound)))
-        menu.addItem(toggle("Notifications", on: notificationsEnabled, action: #selector(toggleNotifications)))
+        // A denial can only be lifted in System Settings, so say so and go
+        // there, rather than offering a switch that changes nothing.
+        let blocked = notificationAuth == .denied
+        menu.addItem(toggle(blocked ? "Notifications — blocked in System Settings" : "Notifications",
+                            on: notificationsEnabled && !blocked,
+                            action: blocked ? #selector(openNotificationSettings)
+                                            : #selector(toggleNotifications)))
         if limits != nil {
             menu.addItem(toggle("Limit alerts", on: limitAlertsEnabled, action: #selector(toggleLimitAlerts)))
             menu.addItem(toggle("Show usage in menu bar", on: showLimitInMenuBar,
@@ -557,6 +581,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate,
 
     @objc private func toggleSound() { soundEnabled.toggle() }
     @objc private func toggleNotifications() { notificationsEnabled.toggle() }
+
+    @objc private func openNotificationSettings() {
+        guard let url = URL(string:
+            "x-apple.systempreferences:com.apple.Notifications-Settings.extension") else { return }
+        NSWorkspace.shared.open(url)
+    }
 
     /// So "I hear nothing" can be answered without waiting for Claude to stop.
     @objc private func testAlert() {
